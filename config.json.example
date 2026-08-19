@@ -1,0 +1,11 @@
+{
+  "starvell_api_key": "",
+  "starvell_user_id": "",
+  "simulation_mode": false,
+  "debug_mode": false,
+  "telegram_bot_token": "",
+  "telegram_admin_ids": [],
+  "watermark_enabled": true,
+  "watermark_text": "🤖 Отправлено через Starvell Assistant",
+  "database_url": "sqlite+aiosqlite:///starvell_bot.db"
+}

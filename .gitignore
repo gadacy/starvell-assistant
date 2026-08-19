@@ -1,0 +1,35 @@
+# Secret / Environment files
+.env
+config.json
+
+# Databases
+*.db
+*.sqlite
+*.sqlite3
+
+# Tests
+tests/
+test_*.py
+
+# Plugins (ignore all custom plugins except order_tracker and auto_thankyou)
+plugins/*
+!plugins/__init__.py
+!plugins/order_tracker.py
+!plugins/auto_thankyou.py
+
+# Python bytecode / cache
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# Environments
+.venv/
+venv/
+ENV/
+env/
+
+# IDE / Editor folders
+.vscode/
+.idea/
+*.swp

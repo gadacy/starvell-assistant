@@ -1,0 +1,3 @@
+"""
+Starvell Marketplace API Module
+"""
