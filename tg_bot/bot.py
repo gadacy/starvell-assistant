@@ -49,9 +49,41 @@ async def send_admin_notification(text: str, parse_mode: Optional[str] = "HTML",
                 except Exception as ex:
                     logger.error(f"[TelegramBot] Error sending plain fallback notification to admin {admin_id}: {ex}")
 
+async def setup_bot_profile():
+    if not bot:
+        return
+    try:
+        from aiogram.types import BotCommand
+        short_desc = "Starvell Assistant Bot — автовыдача, демпинг цен и автоподнятие лотов на Starvell.com. Разработчик: gadacy | Канал: @starvell_assistant"
+        description = (
+            "🤖 Starvell Assistant Bot — многофункциональный автобот для торговой площадки Starvell.com.\n\n"
+            "👤 Разработчик: gadacy\n"
+            "📢 Официальный канал: @starvell_assistant\n"
+            "🐙 GitHub: https://github.com/gadacy/starvell-assistant\n\n"
+            "⚡ Возможности:\n"
+            "• 💬 Живой чат & Пересылка сообщений\n"
+            "• ⚡ Автовыдача и автоподнятие лотов\n"
+            "• 📉 Демпинг цен и авто-ответчик\n"
+            "• ⭐ Напоминалка про отзывы"
+        )
+        await bot.set_my_short_description(short_desc[:120])
+        await bot.set_my_description(description)
+        commands = [
+            BotCommand(command="start", description="Главное меню управления"),
+            BotCommand(command="profile", description="Профиль и статистика Starvell"),
+            BotCommand(command="notifications", description="Настройки уведомлений"),
+            BotCommand(command="about", description="О боте и проекте")
+        ]
+        await bot.set_my_commands(commands)
+        logger.info("[TelegramBot] Обновлено официальное описание бота в профиле Telegram.")
+    except Exception as e:
+        logger.error(f"[TelegramBot] Ошибка обновления описания бота: {e}")
+
 async def send_admin_startup_panel():
     if not bot or not config.telegram_admin_ids:
         return
+
+    await setup_bot_profile()
 
     from tg_bot.keyboards.menu import get_main_menu_kb
     kb = get_main_menu_kb()
