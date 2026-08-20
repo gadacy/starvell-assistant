@@ -64,7 +64,7 @@ class StarvellClient:
             return text
         if wm_text.strip() in text:
             return text
-        return f"{text.rstrip()}\n\n{wm_text}"
+        return f"{wm_text}\n\n{text.lstrip()}"
 
     async def get_client(self) -> httpx.AsyncClient:
         if self._client is None or self._client.is_closed:
