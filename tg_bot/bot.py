@@ -58,7 +58,9 @@ async def send_admin_startup_panel():
 
     text = (
         "🚀 <b>Starvell Assistant Bot успешно запущен!</b>\n\n"
-        "📢 <b>Официальный канал:</b> @starvell_assistant (https://t.me/starvell_assistant)\n\n"
+        "👤 <b>Разработчик:</b> gadacy\n"
+        "📢 <b>Канал проекта:</b> @starvell_assistant\n"
+        "🐙 <b>GitHub:</b> <a href=\"https://github.com/gadacy/starvell-assistant\">github.com/gadacy/starvell-assistant</a>\n\n"
         "🟢 <b>Все службы активны:</b>\n"
         "• 💬 Живой чат & Пересылка сообщений\n"
         "• ⚡ Автовыдача и автоподнятие лотов\n"
@@ -69,7 +71,7 @@ async def send_admin_startup_panel():
 
     for admin_id in config.telegram_admin_ids:
         try:
-            await bot.send_message(admin_id, text, reply_markup=kb, parse_mode="HTML")
+            await bot.send_message(admin_id, text, reply_markup=kb, parse_mode="HTML", disable_web_page_preview=True)
         except Exception as e:
             logger.error(f"[TelegramBot] Ошибка отправки панели администратору {admin_id}: {e}")
 

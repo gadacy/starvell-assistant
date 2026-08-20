@@ -26,12 +26,14 @@ async def cmd_start(message: Message):
         return
 
     welcome_text = (
-        "👑 **Добро пожаловать в Starvell Assistant Bot!**\n\n"
-        "📢 **Официальный канал проекта:** [@starvell_assistant](https://t.me/starvell_assistant)\n\n"
+        "👑 **Starvell Assistant Bot**\n\n"
+        "👤 **Разработчик:** gadacy\n"
+        "📢 **Канал проекта:** @starvell_assistant\n"
+        "🐙 **GitHub:** [github.com/gadacy/starvell-assistant](https://github.com/gadacy/starvell-assistant)\n\n"
         "Бот успешно запущен и готов к работе.\n"
         "Используйте меню ниже для управления авто-ответом, авто-выдачей, лотами и просмотра статистики."
     )
-    await message.answer(welcome_text, reply_markup=get_main_menu_kb(), parse_mode="Markdown")
+    await message.answer(welcome_text, reply_markup=get_main_menu_kb(), parse_mode="Markdown", disable_web_page_preview=True)
 
 @router.callback_query(F.data == "menu_main")
 async def cb_main_menu(call: CallbackQuery):
