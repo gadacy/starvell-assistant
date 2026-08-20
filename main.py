@@ -83,41 +83,54 @@ async def main():
             if bot_inst and config.telegram_admin_ids:
                 import html
                 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+                from core.database.models import StockItem
 
                 safe_id = html.escape(str(order.id))
                 safe_title = html.escape(str(order.lot_title or "Товар"))
                 safe_buyer = html.escape(str(order.buyer_name or "Покупатель"))
-                safe_buyer_id = html.escape(str(order.buyer_id or ""))
                 price = order.total_price or order.price or 0.0
 
                 chat_id = order.chat_id or order.buyer_id
-                kb = None
+                order_url = f"https://starvell.com/chat/{chat_id}" if chat_id else f"https://starvell.com/orders/{safe_id}"
+
+                buttons = [
+                    [InlineKeyboardButton(text="💸 Вернуть деньги", callback_data=f"refund_order_{safe_id}")],
+                    [InlineKeyboardButton(text="🌐 Открыть страницу заказа", url=order_url)]
+                ]
                 if chat_id:
-                    kb = InlineKeyboardMarkup(inline_keyboard=[
-                        [
-                            InlineKeyboardButton(
-                                text="✍️ Чат с покупателем",
-                                callback_data=f"reply_chat_{chat_id}"
-                            )
-                        ]
+                    buttons.append([
+                        InlineKeyboardButton(text="✉️ Ответить", callback_data=f"reply_chat_{chat_id}"),
+                        InlineKeyboardButton(text="📝 Заготовки", callback_data=f"quick_replies_{chat_id}")
                     ])
 
-                if status in ["paid", "new"]:
-                    header = "🎉 <b>Оплачен новый заказ!</b>"
-                elif status == "completed":
-                    header = "✅ <b>Заказ успешно завершен!</b>"
-                elif status in ["cancelled", "canceled", "refunded"]:
-                    header = "❌ <b>Заказ отменен / возврат!</b>"
-                else:
-                    header = f"📦 <b>Обновление статуса заказа ({html.escape(status)})</b>"
+                kb = InlineKeyboardMarkup(inline_keyboard=buttons)
 
-                msg_text = (
-                    f"{header}\n"
-                    f"📦 <b>Заказ:</b> #{safe_id}\n"
-                    f"🛒 <b>Лот:</b> {safe_title}\n"
-                    f"👤 <b>Покупатель:</b> {safe_buyer} (<code>{safe_buyer_id}</code>)\n"
-                    f"💵 <b>Сумма:</b> {price:.2f} RUB"
-                )
+                if status in ["paid", "new"]:
+                    # Check if auto delivery stock is available
+                    async with AsyncSessionLocal() as db_session:
+                        stock_res = await db_session.execute(
+                            select(StockItem).where(StockItem.lot_id == str(order.lot_id), StockItem.is_used == False).limit(1)
+                        )
+                        has_stock = stock_res.scalar_one_or_none() is not None
+
+                    if has_stock:
+                        delivery_info = "⚡ <i>Товар успешно выдан авто-выдачей.</i>"
+                    else:
+                        delivery_info = "ℹ️ <i>Товар не будет выдан, т.к. к лоту не привязана авто-выдача.</i>"
+
+                    msg_text = (
+                        f"💰 <b>Новый заказ:</b> {safe_title}\n\n"
+                        f"👤 <b>Покупатель:</b> {safe_buyer}\n"
+                        f"💵 <b>Сумма:</b> {price:.2f} ₽\n"
+                        f"🆔 <b>ID:</b> #{safe_id}\n\n"
+                        f"{delivery_info}"
+                    )
+                elif status == "completed":
+                    msg_text = f"🌕 Пользователь <b>{safe_buyer}</b> подтвердил выполнение заказа <b>{safe_id}</b>. ({price:.2f} ₽)"
+                elif status in ["cancelled", "canceled", "refunded"]:
+                    msg_text = f"❌ Пользователь <b>{safe_buyer}</b> или администратор отменил заказ <b>{safe_id}</b>. ({price:.2f} ₽)"
+                else:
+                    msg_text = f"📦 <b>Обновление статуса заказа #{safe_id}:</b> {html.escape(status)}"
 
                 for admin_id in config.telegram_admin_ids:
                     try:

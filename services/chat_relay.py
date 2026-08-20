@@ -78,7 +78,7 @@ class ChatRelayService:
         safe_sender = html.escape(sender_name)
         safe_sender_id = html.escape(str(message.sender_id))
         safe_msg_text = html.escape(message.text or "")
-        profile_url = f"https://starvell.com/users/{sender_name}" if sender_name != "Покупатель" else "https://starvell.com"
+        profile_url = f"https://starvell.com/profile/{sender_name}" if sender_name != "Покупатель" else "https://starvell.com"
 
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [

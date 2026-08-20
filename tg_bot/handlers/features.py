@@ -10,6 +10,7 @@ from core.database.models import BotSetting, OrderHistory, QuickReply
 from core.logger import logger
 from starvell.client import StarvellClient
 from tg_bot.keyboards.menu import get_back_kb
+from tg_bot.handlers.common import is_admin
 
 router = Router()
 starvell_client_ref: Optional[StarvellClient] = None
@@ -521,3 +522,13 @@ async def cb_qr_delete(call: CallbackQuery):
             await call.answer("❌ Ответ не найден.", show_alert=True)
 
     await handle_quick_replies_menu(call)
+
+@router.callback_query(F.data.startswith("refund_order_"))
+async def cb_refund_order(call: CallbackQuery):
+    if not is_admin(call.from_user.id):
+        return
+    order_id = call.data.replace("refund_order_", "")
+    await call.answer(
+        f"ℹ️ Для выполнения возврата по заказу #{order_id} перейдите на страницу заказа на Starvell.com.",
+        show_alert=True
+    )

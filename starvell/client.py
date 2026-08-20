@@ -310,12 +310,17 @@ class StarvellClient:
         except Exception as e:
             logger.warning(f"[StarvellClient] Error fetching wallet transactions: {e}")
 
+        raw_orders = []
+
         # 2. Fetch index.json pageProps
-        data = await self.get_next_data("index.json")
-        page_props = data.get("pageProps", {})
-        raw_orders = page_props.get("salesOrders") or page_props.get("recentOrders") or page_props.get("orders") or []
-        if not isinstance(raw_orders, list):
-            raw_orders = []
+        try:
+            data = await self.get_next_data("index.json")
+            page_props = data.get("pageProps", {})
+            idx_orders = page_props.get("salesOrders") or page_props.get("recentOrders") or page_props.get("orders") or []
+            if isinstance(idx_orders, list):
+                raw_orders.extend(idx_orders)
+        except Exception:
+            pass
 
         # 3. Fetch chat.json pageProps for chat orders
         try:
@@ -325,16 +330,20 @@ class StarvellClient:
             if isinstance(chats, list):
                 for c in chats:
                     if isinstance(c, dict):
-                        o = c.get("order") or c.get("lastOrder")
+                        c_id = str(c.get("id", ""))
+                        o = c.get("order") or c.get("lastOrder") or c.get("activeOrder") or c.get("salesOrder")
                         if o and isinstance(o, dict):
-                            raw_orders.append(o)
+                            o_copy = dict(o)
+                            if c_id and not o_copy.get("chatId"):
+                                o_copy["chatId"] = c_id
+                            raw_orders.append(o_copy)
         except Exception:
             pass
 
         from datetime import datetime
         for item in raw_orders:
             if isinstance(item, dict):
-                order_id = str(item.get("id", ""))
+                order_id = str(item.get("publicId") or item.get("shortId") or item.get("id") or item.get("orderId") or "")
                 if not order_id:
                     continue
 
@@ -352,20 +361,40 @@ class StarvellClient:
                 raw_total = float(item.get("totalPrice", item.get("total_price", item.get("price", 0))))
                 raw_single = float(item.get("price", raw_total))
 
-                # Update or add if not in orders_map
-                if order_id not in orders_map:
+                raw_status = str(item.get("status") or item.get("orderStatus") or "paid").lower()
+                if raw_status in ["paid", "new", "created", "pending", "in_progress", "waiting", "unfulfilled", "processing"]:
+                    norm_status = "paid"
+                elif raw_status in ["completed", "confirmed", "fulfilled", "done", "success"]:
+                    norm_status = "completed"
+                elif raw_status in ["canceled", "cancelled", "refunded"]:
+                    norm_status = "refunded"
+                else:
+                    norm_status = raw_status
+
+                buyer_obj = item.get("buyer") if isinstance(item.get("buyer"), dict) else item.get("user") if isinstance(item.get("user"), dict) else {}
+                buyer_name = item.get("buyerName") or item.get("buyer_name") or buyer_obj.get("username") or buyer_obj.get("name") or "Покупатель"
+                buyer_id = str(item.get("buyerId") or item.get("buyer_id") or buyer_obj.get("publicId") or buyer_obj.get("id") or "")
+
+                offer_obj = item.get("offer") if isinstance(item.get("offer"), dict) else item.get("lot") if isinstance(item.get("lot"), dict) else {}
+                lot_title = item.get("offerTitle") or item.get("lot_title") or offer_obj.get("title") or offer_obj.get("name") or "Цифровой товар"
+                lot_id = str(item.get("offerId") or item.get("lot_id") or offer_obj.get("id") or offer_obj.get("publicId") or "")
+
+                chat_id_val = str(item.get("chatId") or item.get("chat_id") or "")
+
+                # Update or add if not present, or if active order status is newer
+                if order_id not in orders_map or norm_status == "paid":
                     orders_map[order_id] = StarvellOrder(
                         id=order_id,
-                        buyer_id=str(item.get("buyerId", item.get("buyer_id", ""))),
-                        buyer_name=item.get("buyerName", item.get("buyer_name", "Покупатель")),
-                        lot_id=str(item.get("offerId", item.get("lot_id", ""))),
-                        lot_title=item.get("offerTitle", item.get("lot_title", "Цифровой товар")),
+                        buyer_id=buyer_id,
+                        buyer_name=buyer_name,
+                        lot_id=lot_id,
+                        lot_title=lot_title,
                         amount=int(item.get("amount", 1)),
                         price=raw_single,
                         total_price=raw_total,
-                        status=item.get("status", "completed"),
+                        status=norm_status,
                         created_at=dt_val,
-                        chat_id=item.get("chatId")
+                        chat_id=chat_id_val
                     )
 
         orders_list = list(orders_map.values())
