@@ -54,7 +54,7 @@ async def setup_bot_profile():
         return
     try:
         from aiogram.types import BotCommand
-        short_desc = "Starvell Assistant Bot — автовыдача, демпинг цен и автоподнятие лотов на Starvell.com. Канал: @starvell_assistant | github.com/gadacy/starvell-assistant"
+        short_desc = "Starvell Assistant Bot @starvell_assistant | github.com/gadacy/starvell-assistant"
         description = (
             "🤖 Starvell Assistant Bot — многофункциональный автобот для торговой площадки Starvell.com.\n\n"
             "📢 Канал проекта: @starvell_assistant\n"
