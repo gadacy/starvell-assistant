@@ -54,12 +54,11 @@ async def setup_bot_profile():
         return
     try:
         from aiogram.types import BotCommand
-        short_desc = "Starvell Assistant Bot — автовыдача, демпинг цен и автоподнятие лотов на Starvell.com. Разработчик: gadacy | Канал: @starvell_assistant"
+        short_desc = "Starvell Assistant Bot — автовыдача, демпинг цен и автоподнятие лотов на Starvell.com. Канал: @starvell_assistant | github.com/gadacy/starvell-assistant"
         description = (
             "🤖 Starvell Assistant Bot — многофункциональный автобот для торговой площадки Starvell.com.\n\n"
-            "👤 Разработчик: gadacy\n"
-            "📢 Официальный канал: @starvell_assistant\n"
-            "🐙 GitHub: https://github.com/gadacy/starvell-assistant\n\n"
+            "📢 Канал проекта: @starvell_assistant\n"
+            "🐙 GitHub: github.com/gadacy/starvell-assistant\n\n"
             "⚡ Возможности:\n"
             "• 💬 Живой чат & Пересылка сообщений\n"
             "• ⚡ Автовыдача и автоподнятие лотов\n"
@@ -90,9 +89,8 @@ async def send_admin_startup_panel():
 
     text = (
         "🚀 <b>Starvell Assistant Bot успешно запущен!</b>\n\n"
-        "👤 <b>Разработчик:</b> gadacy\n"
         "📢 <b>Канал проекта:</b> @starvell_assistant\n"
-        "🐙 <b>GitHub:</b> <a href=\"https://github.com/gadacy/starvell-assistant\">github.com/gadacy/starvell-assistant</a>\n\n"
+        "🐙 <b>GitHub:</b> github.com/gadacy/starvell-assistant\n\n"
         "🟢 <b>Все службы активны:</b>\n"
         "• 💬 Живой чат & Пересылка сообщений\n"
         "• ⚡ Автовыдача и автоподнятие лотов\n"

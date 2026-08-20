@@ -27,9 +27,8 @@ async def cmd_start(message: Message):
 
     welcome_text = (
         "👑 **Starvell Assistant Bot**\n\n"
-        "👤 **Разработчик:** gadacy\n"
         "📢 **Канал проекта:** @starvell_assistant\n"
-        "🐙 **GitHub:** [github.com/gadacy/starvell-assistant](https://github.com/gadacy/starvell-assistant)\n\n"
+        "🐙 **GitHub:** github.com/gadacy/starvell-assistant\n\n"
         "Бот успешно запущен и готов к работе.\n"
         "Используйте меню ниже для управления авто-ответом, авто-выдачей, лотами и просмотра статистики."
     )
