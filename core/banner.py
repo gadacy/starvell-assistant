@@ -32,11 +32,13 @@ ASSISTANT_ART = [
     r"/_/   \_\\____|____/  |_| (_____/    |_| /_/   \_\_| \___|  |_|  "
 ]
 
+from version import __version__
+
 INFO_ITEMS = [
     ("Bot Name", "STARVELL ASSISTANT BOT", WHITE),
     ("Author  ", "gadacy", GREEN),
     ("Channel ", "@starvell_assistant", CYAN),
-    ("Version ", "1.0.0", YELLOW)
+    ("Version ", __version__, YELLOW)
 ]
 
 def _make_line(plain_text: str, colored_text: str = None, align: str = "center", use_color: bool = True) -> str:

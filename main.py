@@ -16,11 +16,13 @@ from services.review_reminder import ReviewReminderService
 from services.plugin_manager import PluginManager
 from tg_bot.bot import init_telegram_bot, send_admin_notification, send_admin_startup_panel, get_bot
 from tg_bot.handlers import features, plugins, stats
+from version import __version__
+from services.update_checker import UpdateCheckerService
 from core.banner import print_banner
 
 async def main():
     print_banner()
-    logger.info("      🚀 Starting Starvell Assistant Bot     ")
+    logger.info(f"      🚀 Starting Starvell Assistant Bot (v{__version__})     ")
 
     # Check if configured or launch setup
     if not config.starvell_api_key and not config.telegram_bot_token:
@@ -173,6 +175,15 @@ async def main():
     await listener.start()
     await auto_raise.start()
     await review_reminder.start()
+
+    async def check_updates_background():
+        await asyncio.sleep(5.0)
+        has_update, msg_text, _ = await UpdateCheckerService.check_for_updates()
+        if has_update:
+            logger.info(f"[Main] {msg_text}")
+            await send_admin_notification(msg_text)
+
+    asyncio.create_task(check_updates_background())
 
     # 5. Initialize Telegram Bot
     bot, dp = init_telegram_bot()

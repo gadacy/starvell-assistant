@@ -7,6 +7,8 @@ from sqlalchemy import select
 from core.database.base import AsyncSessionLocal
 from core.database.models import BotSetting
 from config import config
+from version import __version__
+from services.update_checker import UpdateCheckerService
 from tg_bot.keyboards.menu import get_main_menu_kb, get_settings_kb, get_notifications_kb, get_back_kb
 
 router = Router()
@@ -26,7 +28,7 @@ async def cmd_start(message: Message):
         return
 
     welcome_text = (
-        "👑 **Starvell Assistant Bot**\n\n"
+        f"👑 **Starvell Assistant Bot** (v{__version__})\n\n"
         "📢 **Канал проекта:** @starvell_assistant\n"
         "🐙 **GitHub:** github.com/gadacy/starvell-assistant\n\n"
         "Бот успешно запущен и готов к работе.\n"
@@ -39,7 +41,7 @@ async def cb_main_menu(call: CallbackQuery):
     if not is_admin(call.from_user.id):
         return
     await call.message.edit_text(
-        "👑 **Главное меню управления Starvell Assistant:**",
+        f"👑 **Главное меню управления Starvell Assistant (v{__version__}):**",
         reply_markup=get_main_menu_kb(),
         parse_mode="Markdown"
     )
@@ -203,3 +205,53 @@ async def cb_toggle_notify(call: CallbackQuery):
         await session.commit()
 
     await handle_notifications_menu(call)
+
+# --- Update Checker & Self-Restart Handlers ---
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+import asyncio
+
+@router.callback_query(F.data == "menu_check_updates")
+async def cb_check_updates(call: CallbackQuery):
+    if not is_admin(call.from_user.id):
+        return
+
+    await call.message.edit_text("⏳ **Проверка наличия обновлений на GitHub...**", parse_mode="Markdown")
+    has_update, msg_text, update_info = await UpdateCheckerService.check_for_updates()
+
+    buttons = [
+        [InlineKeyboardButton(text="🚀 Обновить и перезапустить", callback_data="perform_bot_update")],
+        [InlineKeyboardButton(text="◀️ Назад в настройки", callback_data="menu_settings")]
+    ]
+
+    await call.message.edit_text(
+        msg_text,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+        parse_mode="Markdown",
+        disable_web_page_preview=True
+    )
+
+@router.callback_query(F.data == "perform_bot_update")
+async def cb_perform_update(call: CallbackQuery):
+    if not is_admin(call.from_user.id):
+        return
+
+    await call.message.edit_text(
+        "⏳ **Выполняется скачивание обновлений из GitHub (`git pull origin main`)...**",
+        parse_mode="Markdown"
+    )
+
+    success, result = await UpdateCheckerService.perform_git_pull()
+    if success:
+        await call.message.edit_text(
+            f"✅ **Обновление успешно загружено!**\n\n`{result[:200]}`\n\n"
+            f"🔄 **Выполняется перезапуск процесса бота...**",
+            parse_mode="Markdown"
+        )
+        await asyncio.sleep(1.0)
+        UpdateCheckerService.restart_bot()
+    else:
+        await call.message.edit_text(
+            f"❌ **Ошибка при обновлении через Git:**\n\n`{result}`",
+            reply_markup=get_back_kb(),
+            parse_mode="Markdown"
+        )

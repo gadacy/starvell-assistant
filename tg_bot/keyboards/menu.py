@@ -60,6 +60,9 @@ def get_settings_kb(responder: bool, delivery: bool, raise_lots: bool, watermark
             )
         ],
         [
+            InlineKeyboardButton(text="🔄 Проверить обновления", callback_data="menu_check_updates")
+        ],
+        [
             InlineKeyboardButton(text="◀️ Назад", callback_data="menu_main")
         ]
     ])
