@@ -4,6 +4,7 @@ from aiogram import Bot, Dispatcher
 from config import config
 from core.logger import logger
 from tg_bot.handlers import common, stock, auto_response, auto_delivery, stats, features, dumper, auto_raise, plugins
+from tg_bot.middlewares import AdminAuthMiddleware
 
 bot: Optional[Bot] = None
 dp: Optional[Dispatcher] = None
@@ -17,6 +18,11 @@ def init_telegram_bot() -> tuple[Optional[Bot], Optional[Dispatcher]]:
 
     bot = Bot(token=token)
     dp = Dispatcher()
+
+    # Register global admin whitelist security middleware
+    admin_middleware = AdminAuthMiddleware()
+    dp.message.outer_middleware(admin_middleware)
+    dp.callback_query.outer_middleware(admin_middleware)
 
     # Register routers
     dp.include_router(common.router)
