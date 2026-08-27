@@ -52,7 +52,7 @@
 ║   [*] Bot Name : STARVELL ASSISTANT BOT                         ║
 ║   [*] Author   : gadacy                                         ║
 ║   [*] Channel  : @starvell_assistant                            ║
-║   [*] Version  : 1.0.0                                          ║
+║   [*] Version  : 1.0.6                                          ║
 ╚═════════════════════════════════════════════════════════════════╝
 ```
 
