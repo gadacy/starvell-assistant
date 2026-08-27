@@ -25,15 +25,20 @@ def init_telegram_bot() -> tuple[Optional[Bot], Optional[Dispatcher]]:
     dp.callback_query.outer_middleware(admin_middleware)
 
     # Register routers
-    dp.include_router(common.router)
-    dp.include_router(stock.router)
-    dp.include_router(auto_response.router)
-    dp.include_router(auto_delivery.router)
-    dp.include_router(stats.router)
-    dp.include_router(features.router)
-    dp.include_router(dumper.router)
-    dp.include_router(auto_raise.router)
-    dp.include_router(plugins.router)
+    routers = [
+        common.router,
+        stock.router,
+        auto_response.router,
+        auto_delivery.router,
+        stats.router,
+        features.router,
+        dumper.router,
+        auto_raise.router,
+        plugins.router
+    ]
+    for r in routers:
+        r.parent_router = None
+        dp.include_router(r)
 
     logger.info("[TelegramBot] Initialized Telegram Bot successfully.")
     return bot, dp

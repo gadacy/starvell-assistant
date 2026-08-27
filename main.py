@@ -234,6 +234,9 @@ async def main():
         logger.info("--------------------------------------------------")
         importlib.reload(config)
         importlib.reload(version)
+        importlib.reload(features)
+        importlib.reload(plugins)
+        importlib.reload(stats)
         await asyncio.sleep(1.0)
 
 if __name__ == "__main__":
