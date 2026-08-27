@@ -36,6 +36,19 @@ async def cmd_start(message: Message):
     )
     await message.answer(welcome_text, reply_markup=get_main_menu_kb(), parse_mode="Markdown", disable_web_page_preview=True)
 
+@router.message(Command("restart"))
+async def cmd_restart(message: Message):
+    if not is_admin(message.from_user.id):
+        await message.answer("❌ Доступ запрещен.")
+        return
+
+    await message.answer(
+        "🔄 **Выполняется системный перезапуск процесса бота...**",
+        parse_mode="Markdown"
+    )
+    await asyncio.sleep(1.0)
+    UpdateCheckerService.restart_bot()
+
 @router.callback_query(F.data == "menu_main")
 async def cb_main_menu(call: CallbackQuery):
     if not is_admin(call.from_user.id):
