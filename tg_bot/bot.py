@@ -37,7 +37,7 @@ def init_telegram_bot() -> tuple[Optional[Bot], Optional[Dispatcher]]:
         plugins.router
     ]
     for r in routers:
-        r.parent_router = None
+        r._parent_router = None
         dp.include_router(r)
 
     logger.info("[TelegramBot] Initialized Telegram Bot successfully.")
