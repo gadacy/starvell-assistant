@@ -28,13 +28,13 @@ async def cmd_start(message: Message):
         return
 
     welcome_text = (
-        f"👑 **Starvell Assistant Bot** (v{__version__})\n\n"
-        "📢 **Канал проекта:** @starvell_assistant\n"
-        "🐙 **GitHub:** github.com/gadacy/starvell-assistant\n\n"
+        f"👑 <b>Starvell Assistant Bot</b> (v{__version__})\n\n"
+        "📢 <b>Канал проекта:</b> @starvell_assistant\n"
+        "🐙 <b>GitHub:</b> github.com/gadacy/starvell-assistant\n\n"
         "Бот успешно запущен и готов к работе.\n"
         "Используйте меню ниже для управления авто-ответом, авто-выдачей, лотами и просмотра статистики."
     )
-    await message.answer(welcome_text, reply_markup=get_main_menu_kb(), parse_mode="Markdown", disable_web_page_preview=True)
+    await message.answer(welcome_text, reply_markup=get_main_menu_kb(), parse_mode="HTML", disable_web_page_preview=True)
 
 @router.message(Command("restart"))
 async def cmd_restart(message: Message):
@@ -43,8 +43,8 @@ async def cmd_restart(message: Message):
         return
 
     await message.answer(
-        "🔄 **Выполняется системный перезапуск процесса бота...**",
-        parse_mode="Markdown"
+        "🔄 <b>Выполняется системный перезапуск процесса бота...</b>",
+        parse_mode="HTML"
     )
     await asyncio.sleep(1.0)
     UpdateCheckerService.restart_bot()
@@ -54,9 +54,9 @@ async def cb_main_menu(call: CallbackQuery):
     if not is_admin(call.from_user.id):
         return
     await call.message.edit_text(
-        f"👑 **Главное меню управления Starvell Assistant (v{__version__}):**",
+        f"👑 <b>Главное меню управления Starvell Assistant (v{__version__}):</b>",
         reply_markup=get_main_menu_kb(),
-        parse_mode="Markdown"
+        parse_mode="HTML"
     )
 
 # --- Settings Menu ---
@@ -77,11 +77,11 @@ async def cb_settings(call: CallbackQuery):
     wm_text = settings_dict.get("watermark_text", config.watermark_text)
 
     await call.message.edit_text(
-        f"⚙️ **Настройки модулей бота:**\n\n"
-        f"🤖 **Водяной знак авто-сообщений:**\n`{wm_text}`\n\n"
+        f"⚙️ <b>Настройки модулей бота:</b>\n\n"
+        f"🤖 <b>Водяной знак авто-сообщений:</b>\n<code>{wm_text}</code>\n\n"
         f"Нажмите на кнопку для изменения настроек.",
         reply_markup=get_settings_kb(responder, delivery, raise_lots, watermark),
-        parse_mode="Markdown"
+        parse_mode="HTML"
     )
 
 @router.callback_query(F.data.in_(["toggle_auto_responder", "toggle_auto_delivery", "toggle_auto_raise"]))
@@ -132,10 +132,10 @@ async def cb_edit_watermark(call: CallbackQuery, state: FSMContext):
 
     await state.set_state(WatermarkState.waiting_for_text)
     await call.message.edit_text(
-        "✏️ **Введите новый текст водяного знака для авто-сообщений бота:**\n\n"
-        "Пример: `🤖 Отправлено через Starvell Assistant`",
+        "✏️ <b>Введите новый текст водяного знака для авто-сообщений бота:</b>\n\n"
+        "Пример: <code>🤖 Отправлено через Starvell Assistant</code>",
         reply_markup=get_back_kb(),
-        parse_mode="Markdown"
+        parse_mode="HTML"
     )
 
 @router.message(WatermarkState.waiting_for_text)
@@ -159,9 +159,9 @@ async def process_watermark_text(message: Message, state: FSMContext):
 
     await state.clear()
     await message.answer(
-        f"✅ **Водяной знак успешно обновлен!**\n\n`{new_text}`",
+        f"✅ <b>Водяной знак успешно обновлен!</b>\n\n<code>{new_text}</code>",
         reply_markup=get_back_kb(),
-        parse_mode="Markdown"
+        parse_mode="HTML"
     )
 
 # --- Notifications Settings Panel ---
@@ -192,15 +192,15 @@ async def handle_notifications_menu(event: Message | CallbackQuery):
 
     kb = get_notifications_kb(settings_dict)
     text = (
-        "🔔 **Настройка уведомлений Telegram (Starvell Assistant):**\n\n"
+        "🔔 <b>Настройка уведомлений Telegram (Starvell Assistant):</b>\n\n"
         "Управляйте тем, какие сообщения и оповещения бот будет присылать вам в Telegram.\n"
         "Нажмите на соответствующую кнопку для включения/выключения типа уведомлений."
     )
 
     if isinstance(event, CallbackQuery):
-        await event.message.edit_text(text, reply_markup=kb, parse_mode="Markdown")
+        await event.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
     else:
-        await event.answer(text, reply_markup=kb, parse_mode="Markdown")
+        await event.answer(text, reply_markup=kb, parse_mode="HTML")
 
 @router.callback_query(F.data.startswith("toggle_notify_"))
 async def cb_toggle_notify(call: CallbackQuery):
@@ -228,8 +228,11 @@ async def cb_check_updates(call: CallbackQuery):
     if not is_admin(call.from_user.id):
         return
 
-    await call.message.edit_text("⏳ **Проверка наличия обновлений на GitHub...**", parse_mode="Markdown")
+    await call.message.edit_text("⏳ <b>Проверка наличия обновлений на GitHub...</b>", parse_mode="HTML")
     has_update, msg_text, update_info = await UpdateCheckerService.check_for_updates()
+
+    # Convert markdown to html tags if present in msg_text
+    html_msg = msg_text.replace("**", "<b>").replace("`", "<code>")
 
     buttons = [
         [InlineKeyboardButton(text="🚀 Обновить и перезапустить", callback_data="perform_bot_update")],
@@ -237,9 +240,9 @@ async def cb_check_updates(call: CallbackQuery):
     ]
 
     await call.message.edit_text(
-        msg_text,
+        html_msg,
         reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
-        parse_mode="Markdown",
+        parse_mode="HTML",
         disable_web_page_preview=True
     )
 
@@ -249,22 +252,22 @@ async def cb_perform_update(call: CallbackQuery):
         return
 
     await call.message.edit_text(
-        "⏳ **Выполняется скачивание обновлений из GitHub (`git pull origin main`)...**",
-        parse_mode="Markdown"
+        "⏳ <b>Выполняется скачивание обновлений из GitHub (<code>git pull origin main</code>)...</b>",
+        parse_mode="HTML"
     )
 
     success, result = await UpdateCheckerService.perform_git_pull()
     if success:
         await call.message.edit_text(
-            f"✅ **Обновление успешно загружено!**\n\n`{result[:200]}`\n\n"
-            f"🔄 **Выполняется перезапуск процесса бота...**",
-            parse_mode="Markdown"
+            f"✅ <b>Обновление успешно загружено!</b>\n\n<code>{result[:200]}</code>\n\n"
+            f"🔄 <b>Выполняется перезапуск процесса бота...</b>",
+            parse_mode="HTML"
         )
         await asyncio.sleep(1.0)
         UpdateCheckerService.restart_bot()
     else:
         await call.message.edit_text(
-            f"❌ **Ошибка при обновлении через Git:**\n\n`{result}`",
+            f"❌ <b>Ошибка при обновлении через Git:</b>\n\n<code>{result}</code>",
             reply_markup=get_back_kb(),
-            parse_mode="Markdown"
+            parse_mode="HTML"
         )

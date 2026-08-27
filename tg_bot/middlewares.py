@@ -30,7 +30,7 @@ class AdminAuthMiddleware(BaseMiddleware):
             if user_id not in admin_ids:
                 logger.warning(f"[Security] Access BLOCKED for unauthorized Telegram user ID: {user_id}")
                 if isinstance(event, Message):
-                    await event.answer("❌ **Доступ запрещен.** Вы не являетесь администратором бота.", parse_mode="Markdown")
+                    await event.answer("❌ <b>Доступ запрещен.</b> Вы не являетесь администратором бота.", parse_mode="HTML")
                 elif isinstance(event, CallbackQuery):
                     await event.answer("❌ Доступ запрещен.", show_alert=True)
                 return None
