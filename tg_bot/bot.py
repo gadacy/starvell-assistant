@@ -3,7 +3,7 @@ from typing import Optional
 from aiogram import Bot, Dispatcher
 from config import config
 from core.logger import logger
-from tg_bot.handlers import common, stock, auto_response, stats, features, dumper, auto_raise, plugins
+from tg_bot.handlers import common, stock, auto_response, auto_delivery, stats, features, dumper, auto_raise, plugins
 
 bot: Optional[Bot] = None
 dp: Optional[Dispatcher] = None
@@ -22,6 +22,7 @@ def init_telegram_bot() -> tuple[Optional[Bot], Optional[Dispatcher]]:
     dp.include_router(common.router)
     dp.include_router(stock.router)
     dp.include_router(auto_response.router)
+    dp.include_router(auto_delivery.router)
     dp.include_router(stats.router)
     dp.include_router(features.router)
     dp.include_router(dumper.router)
