@@ -1,7 +1,8 @@
+import importlib
 import asyncio
 import sys
 from sqlalchemy import select
-from config import config, save_config
+import config
 from core.database.base import init_db, AsyncSessionLocal
 from core.database.models import BotSetting
 from core.logger import logger
@@ -16,31 +17,35 @@ from services.review_reminder import ReviewReminderService
 from services.plugin_manager import PluginManager
 from tg_bot.bot import init_telegram_bot, send_admin_notification, send_admin_startup_panel, get_bot
 from tg_bot.handlers import features, plugins, stats
-from version import __version__
-from services.update_checker import UpdateCheckerService
+import version
+from services.update_checker import UpdateCheckerService, restart_event
 from core.banner import print_banner
 
-async def main():
-    print_banner()
-    logger.info(f"      🚀 Starting Starvell Assistant Bot (v{__version__})     ")
+async def run_bot_instance() -> bool:
+    """
+    Runs a single instance of the bot.
+    Returns True if soft restart was requested, False if shutdown.
+    """
+    restart_event.clear()
+    cfg = config.config
 
     # Check if configured or launch setup
-    if not config.starvell_api_key and not config.telegram_bot_token:
+    if not cfg.starvell_api_key and not cfg.telegram_bot_token:
         logger.warning("[Main] Bot is unconfigured. Starting setup wizard...")
         print("\n⚠️ Конфигурация бота не найдена или пуста!")
         run_wizard = input("Желаете запустить Мастер Настройки (setup.py)? (Y/n): ").strip().lower()
         if run_wizard != "n":
             from setup import run_setup
             run_setup()
-            return
+            return False
 
     # 1. Initialize Database
     await init_db()
     logger.info("[Main] Database initialized.")
 
     # 2. Initialize Starvell API Client
-    starvell_client = StarvellClient(api_key=config.starvell_api_key)
-    if config.simulation_mode:
+    starvell_client = StarvellClient(api_key=cfg.starvell_api_key)
+    if cfg.simulation_mode:
         starvell_client.is_simulation = True
 
     if starvell_client.is_simulation:
@@ -92,7 +97,7 @@ async def main():
 
         if notify_enabled:
             bot_inst = get_bot()
-            if bot_inst and config.telegram_admin_ids:
+            if bot_inst and cfg.telegram_admin_ids:
                 import html
                 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
                 from core.database.models import StockItem
@@ -118,7 +123,6 @@ async def main():
                 kb = InlineKeyboardMarkup(inline_keyboard=buttons)
 
                 if status in ["paid", "new"]:
-                    # Check if auto delivery stock is available
                     async with AsyncSessionLocal() as db_session:
                         stock_res = await db_session.execute(
                             select(StockItem).where(StockItem.lot_id == str(order.lot_id), StockItem.is_used == False).limit(1)
@@ -144,7 +148,7 @@ async def main():
                 else:
                     msg_text = f"📦 <b>Обновление статуса заказа #{safe_id}:</b> {html.escape(status)}"
 
-                for admin_id in config.telegram_admin_ids:
+                for admin_id in cfg.telegram_admin_ids:
                     try:
                         await bot_inst.send_message(admin_id, msg_text, reply_markup=kb, parse_mode="HTML")
                         logger.info(f"[OrderRelay] Sent order notification for order #{order.id} ({status}) to admin {admin_id}")
@@ -193,19 +197,44 @@ async def main():
 
     await send_admin_startup_panel()
 
-    # Serve until cancelled
+    restart_requested = False
     try:
-        await asyncio.Event().wait()
+        wait_task = asyncio.create_task(restart_event.wait())
+        done, pending = await asyncio.wait([wait_task], return_when=asyncio.FIRST_COMPLETED)
+        if wait_task in done and restart_event.is_set():
+            logger.info("[Main] Получен сигнал мягкого перезапуска бота!")
+            restart_requested = True
     except (KeyboardInterrupt, asyncio.CancelledError):
-        logger.info("[Main] Shutting down services...")
+        logger.info("[Main] Завершение работы служб бота...")
     finally:
+        logger.info("[Main] Остановка служб и завершение подключений...")
         await listener.stop()
         await auto_raise.stop()
         await review_reminder.stop()
         await starvell_client.close()
-        if bot_task:
+        if bot and dp:
+            await dp.stop_polling()
+            if bot.session:
+                await bot.session.close()
+        if bot_task and not bot_task.done():
             bot_task.cancel()
-        logger.info("[Main] Starvell Assistant Bot stopped cleanly.")
+        logger.info("[Main] Инстанс бота успешно остановлен.")
+
+    return restart_requested
+
+async def main():
+    print_banner()
+    while True:
+        logger.info(f"      🚀 Starting Starvell Assistant Bot (v{version.__version__})     ")
+        should_restart = await run_bot_instance()
+        if not should_restart:
+            break
+        logger.info("--------------------------------------------------")
+        logger.info("🔄 [Main] Мягкий перезапуск всех служб в текущем окне...")
+        logger.info("--------------------------------------------------")
+        importlib.reload(config)
+        importlib.reload(version)
+        await asyncio.sleep(1.0)
 
 if __name__ == "__main__":
     try:

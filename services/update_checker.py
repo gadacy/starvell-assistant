@@ -6,6 +6,12 @@ from typing import Tuple, Optional, Dict, Any
 from core.logger import logger
 from version import __version__, VERSION_URL
 
+restart_event = asyncio.Event()
+
+def trigger_soft_restart():
+    logger.info("[UpdateChecker] Сигнал мягкого перезапуска отправлен.")
+    restart_event.set()
+
 class UpdateCheckerService:
     @staticmethod
     async def check_for_updates() -> Tuple[bool, str, Optional[Dict[str, Any]]]:
@@ -70,8 +76,7 @@ class UpdateCheckerService:
     @staticmethod
     def restart_bot():
         """
-        Restarts current Python process cleanly.
+        Triggers soft restart in the active process.
         """
-        logger.info("[UpdateChecker] Выполняется перезапуск процесса бота...")
-        python = sys.executable
-        os.execl(python, python, *sys.argv)
+        logger.info("[UpdateChecker] Инициирован мягкий перезапуск процессов бота...")
+        trigger_soft_restart()
