@@ -91,13 +91,58 @@ class StarvellListener:
         except Exception as e:
             logger.error(f"[StarvellListener] Error checking orders: {e}")
 
+    def is_my_message(self, last_msg: dict) -> bool:
+        """
+        Comprehensive check to determine if a message was sent by our own account (seller / bot).
+        Checks boolean flags, author IDs, public IDs, and participant roles.
+        """
+        if not isinstance(last_msg, dict):
+            return False
+
+        # 1. Direct boolean flags from API/Frontend JSON
+        for flag in ("isMyMessage", "isMine", "isOwn", "isSelf", "isMe", "isOutgoing", "isFromMe", "sentByMe"):
+            val = last_msg.get(flag)
+            if val is True or (isinstance(val, str) and val.lower() == "true"):
+                return True
+
+        # 2. Check author object and fields
+        author_id = str(last_msg.get("authorId") or last_msg.get("sender_id") or last_msg.get("senderId") or "")
+        author_obj = last_msg.get("author") if isinstance(last_msg.get("author"), dict) else {}
+        author_pub = str(last_msg.get("authorPublicId") or author_obj.get("publicId") or "")
+        author_num = str(author_obj.get("id") or "")
+
+        my_user_id = str(getattr(self.client, 'user_id', '') or '')
+        my_public_id = str(getattr(self.client, 'public_id', '') or '')
+
+        if my_user_id and my_user_id.lower() != "none":
+            if author_id == my_user_id or author_num == my_user_id:
+                return True
+        if my_public_id and my_public_id.lower() != "none":
+            if author_pub == my_public_id or author_id == my_public_id:
+                return True
+
+        # 3. Check author role if present (e.g. "seller", "owner", "me")
+        author_role = str(last_msg.get("role") or author_obj.get("role") or "").lower()
+        if author_role in ("seller", "owner", "me"):
+            return True
+
+        return False
+
     async def _check_messages(self):
         try:
+            # Ensure profile user IDs are loaded if available
+            if not self.client.user_id and not self.client.public_id and not self.client.is_simulation:
+                try:
+                    await self.client.get_profile()
+                except Exception:
+                    pass
+
             chats = await self.client.get_chats()
             if not isinstance(chats, list):
                 return
 
             my_public_id = str(self.client.public_id or "")
+            my_user_id = str(getattr(self.client, 'user_id', '') or '')
 
             for chat in chats:
                 if not isinstance(chat, dict):
@@ -114,13 +159,6 @@ class StarvellListener:
                 if msg_id in self._seen_messages:
                     continue
 
-                author_id = str(last_msg.get("authorId", last_msg.get("sender_id", "")))
-                author_obj = last_msg.get("author") if isinstance(last_msg.get("author"), dict) else {}
-                author_pub = str(last_msg.get("authorPublicId", author_obj.get("publicId", "")))
-                author_num = str(author_obj.get("id", ""))
-
-                my_user_id = str(getattr(self.client, 'user_id', '') or '')
-
                 # Seed existing message IDs on initial run
                 if not self._messages_initialized:
                     self._seen_messages.add(msg_id)
@@ -128,12 +166,14 @@ class StarvellListener:
 
                 self._seen_messages.add(msg_id)
 
-                # Skip messages sent by ourselves (the seller / bot)
-                if my_user_id and (author_id == my_user_id or author_num == my_user_id):
-                    continue
-                if my_public_id and (author_pub == my_public_id or author_id == my_public_id):
+                # Skip messages sent by our own account (seller / bot)
+                if self.is_my_message(last_msg):
+                    logger.info(f"[StarvellListener] Сообщение от нашего аккаунта в чате {chat_id}. Пропускаем уведомление TG.")
+                    event = StarvellEvent(event_type="self_message", chat_id=chat_id)
+                    await self._emit(event)
                     continue
 
+                author_id = str(last_msg.get("authorId", last_msg.get("sender_id", "")))
                 sender_name = "Покупатель"
                 participants = chat.get("participants", [])
                 if isinstance(participants, list):

@@ -46,6 +46,11 @@ async def main():
         logger.info("🛠️ Бот запущен в РЕЖИМЕ СИМУЛЯЦИИ (Dry-Run Mode).")
         logger.info("Все функции бота работают локально без реальных списаний/запросов.")
         logger.info("--------------------------------------------------")
+    else:
+        try:
+            await starvell_client.get_profile()
+        except Exception as e:
+            logger.warning(f"[Main] Не удалось предзагрузить профиль при старте: {e}")
 
     # Set client reference for handlers
     features.set_client(starvell_client)
@@ -60,6 +65,7 @@ async def main():
     auto_delivery = AutoDeliveryService(client=starvell_client, telegram_notifier=send_admin_notification)
     auto_raise = AutoRaiseService(client=starvell_client, interval_seconds=1800)
     chat_relay = ChatRelayService(client=starvell_client)
+    await chat_relay.init_seen_chats()
     review_reminder = ReviewReminderService(client=starvell_client, check_interval=300, delay_minutes=15)
 
     # 4. Event Handler Routing
@@ -67,6 +73,10 @@ async def main():
         order = event.order
         if not order:
             return
+
+        order_chat_id = str(order.chat_id or order.buyer_id or "")
+        if order_chat_id:
+            await chat_relay.mark_chat_seen(order_chat_id)
 
         status = (order.status or "").lower()
 
@@ -148,6 +158,8 @@ async def main():
         if event.event_type == "new_message" and event.message:
             await chat_relay.process_incoming_message(event.message, event.order)
             await auto_responder.process_message(event.message, event.order)
+        elif event.event_type == "self_message" and event.chat_id:
+            await chat_relay.update_chat_activity(event.chat_id)
         elif event.event_type.startswith("order_") and event.order:
             await process_order_event(event)
 

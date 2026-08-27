@@ -17,11 +17,16 @@ AsyncSessionLocal = async_sessionmaker(
 class Base(DeclarativeBase):
     pass
 
+from sqlalchemy import select, text
+
 async def init_db():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        try:
+            await conn.execute(text("ALTER TABLE seen_chats ADD COLUMN last_seen_at DATETIME"))
+        except Exception:
+            pass
 
-    from sqlalchemy import select
     from core.database.models import QuickReply
     async with AsyncSessionLocal() as session:
         res = await session.execute(select(QuickReply))

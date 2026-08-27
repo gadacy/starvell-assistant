@@ -30,10 +30,37 @@ class BroadcastState(StatesGroup):
 
 class GreetingEditState(StatesGroup):
     waiting_for_text = State()
+    waiting_for_regreeting_text = State()
+    waiting_for_custom_cooldown = State()
 
 class AddQuickReplyState(StatesGroup):
     waiting_for_title = State()
     waiting_for_text = State()
+
+def format_cooldown_label(hours: float) -> str:
+    if hours <= 0:
+        return "Без паузы"
+    if hours == 1:
+        return "1 час"
+    if hours == 6:
+        return "6 часов"
+    if hours == 12:
+        return "12 часов"
+    if hours == 24:
+        return "1 день (24 ч)"
+    if hours == 48:
+        return "2 дня (48 ч)"
+    if hours == 72:
+        return "3 дня (72 ч)"
+    if hours == 168:
+        return "7 дней (1 неделя)"
+    if hours == 336:
+        return "14 дней (2 недели)"
+    if hours == 720:
+        return "30 дней (1 месяц)"
+    if hours.is_integer():
+        return f"{int(hours)} ч"
+    return f"{hours:.1f} ч"
 
 # --- Main Features Keyboard ---
 def get_features_kb(greeting: bool, reminder: bool) -> InlineKeyboardMarkup:
@@ -51,7 +78,7 @@ def get_features_kb(greeting: bool, reminder: bool) -> InlineKeyboardMarkup:
                 text=f"Приветствие: {'🟢 ВКЛ' if greeting else '🔴 ВЫКЛ'}",
                 callback_data="toggle_feature_greeting"
             ),
-            InlineKeyboardButton(text="✏️ Изменить текст", callback_data="edit_feature_greeting")
+            InlineKeyboardButton(text="⚙️ Настройки приветствия", callback_data="menu_greeting_settings")
         ],
         [
             InlineKeyboardButton(
@@ -251,58 +278,210 @@ async def cb_toggle_feature(call: CallbackQuery):
             session.add(BotSetting(key=key, value="false"))
         await session.commit()
 
-    await cb_features_menu(call)
+    if feature_name == "greeting":
+        await cb_greeting_settings(call)
+    else:
+        await cb_features_menu(call)
 
-# --- 6. Broadcast ---
-@router.callback_query(F.data == "feature_broadcast")
-async def cb_broadcast(call: CallbackQuery, state: FSMContext):
-    await state.set_state(BroadcastState.waiting_for_text)
+# --- 6. Greeting Settings Menu & Handlers ---
+def get_greeting_settings_kb(enabled: bool, mode: str) -> InlineKeyboardMarkup:
+    mode_text = "Единожды 🔒" if mode == "once" else "При неактивности 🔄"
+    buttons = [
+        [
+            InlineKeyboardButton(
+                text=f"Статус: {'🟢 ВКЛ' if enabled else '🔴 ВЫКЛ'}",
+                callback_data="toggle_feature_greeting"
+            ),
+            InlineKeyboardButton(
+                text=f"Режим: {mode_text}",
+                callback_data="toggle_greeting_mode"
+            )
+        ]
+    ]
+    if mode == "cooldown":
+        buttons.append([
+            InlineKeyboardButton(
+                text="⏱ Выбрать интервал неактивности",
+                callback_data="select_greeting_cooldown"
+            )
+        ])
+    buttons.extend([
+        [
+            InlineKeyboardButton(text="✏️ Первичное приветствие", callback_data="edit_greeting_primary"),
+            InlineKeyboardButton(text="✏️ Повторное приветствие", callback_data="edit_greeting_secondary")
+        ],
+        [
+            InlineKeyboardButton(text="◀️ Назад в Фишки", callback_data="menu_features")
+        ]
+    ])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+def get_cooldown_presets_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="1 час", callback_data="set_g_cd_1"),
+            InlineKeyboardButton(text="6 часов", callback_data="set_g_cd_6"),
+            InlineKeyboardButton(text="12 часов", callback_data="set_g_cd_12")
+        ],
+        [
+            InlineKeyboardButton(text="1 день (24ч)", callback_data="set_g_cd_24"),
+            InlineKeyboardButton(text="3 дня (72ч)", callback_data="set_g_cd_72"),
+            InlineKeyboardButton(text="7 дней (168ч)", callback_data="set_g_cd_168")
+        ],
+        [
+            InlineKeyboardButton(text="30 дней (720ч)", callback_data="set_g_cd_720"),
+            InlineKeyboardButton(text="✏️ Свое число часов", callback_data="custom_greeting_cooldown")
+        ],
+        [
+            InlineKeyboardButton(text="◀️ Назад", callback_data="menu_greeting_settings")
+        ]
+    ])
+
+@router.callback_query(F.data == "menu_greeting_settings")
+async def cb_greeting_settings(call: CallbackQuery):
+    async with AsyncSessionLocal() as session:
+        res_e = await session.execute(select(BotSetting).where(BotSetting.key == "auto_greeting_enabled"))
+        set_e = res_e.scalar_one_or_none()
+        enabled = set_e.value.lower() == "true" if set_e else True
+
+        res_m = await session.execute(select(BotSetting).where(BotSetting.key == "auto_greeting_mode"))
+        set_m = res_m.scalar_one_or_none()
+        mode = set_m.value.lower() if set_m and set_m.value else "once"
+
+        res_cd = await session.execute(select(BotSetting).where(BotSetting.key == "auto_greeting_cooldown_hours"))
+        set_cd = res_cd.scalar_one_or_none()
+        cd_hours = float(set_cd.value) if set_cd and set_cd.value else 168.0
+
+        res_t1 = await session.execute(select(BotSetting).where(BotSetting.key == "auto_greeting_text"))
+        set_t1 = res_t1.scalar_one_or_none()
+        text_primary = set_t1.value if set_t1 and set_t1.value else "👋 **Здравствуйте, {buyer_name}!** Рады видеть вас в нашем магазине. Чем можем помочь?"
+
+        res_t2 = await session.execute(select(BotSetting).where(BotSetting.key == "auto_regreeting_text"))
+        set_t2 = res_t2.scalar_one_or_none()
+        text_secondary = set_t2.value if set_t2 and set_t2.value else "👋 **С возвращением, {buyer_name}!** Снова рады видеть вас. Чем можем помочь?"
+
+    mode_str = "Единожды 🔒 (1 раз за всё время)" if mode == "once" else f"Повторно при неактивности 🔄 (пауза {format_cooldown_label(cd_hours)})"
+
+    msg_text = (
+        "⚙️ **Настройки авто-приветствия покупателей:**\n\n"
+        f"Статус: **{'🟢 ВКЛ' if enabled else '🔴 ВЫКЛ'}**\n"
+        f"Режим: **{mode_str}**\n\n"
+        f"👋 **Первичное приветствие (новым клиентам):**\n`{text_primary}`\n\n"
+        f"🔄 **Повторное приветствие (после паузы):**\n`{text_secondary}`\n\n"
+        "💡 *Приветствие отправляется ТОЛЬКО при получении входящего сообщения от покупателя.*"
+    )
+
     await call.message.edit_text(
-        "📣 **Массовая рассылка всем покупателям Starvell:**\n\n"
-        "Введите текст сообщения для рассылки всем клиентам из вашей истории заказов.",
+        msg_text,
+        reply_markup=get_greeting_settings_kb(enabled, mode),
+        parse_mode="Markdown"
+    )
+
+@router.callback_query(F.data == "toggle_greeting_mode")
+async def cb_toggle_greeting_mode(call: CallbackQuery):
+    async with AsyncSessionLocal() as session:
+        res = await session.execute(select(BotSetting).where(BotSetting.key == "auto_greeting_mode"))
+        setting = res.scalar_one_or_none()
+        if setting:
+            setting.value = "cooldown" if setting.value.lower() == "once" else "once"
+        else:
+            session.add(BotSetting(key="auto_greeting_mode", value="cooldown"))
+        await session.commit()
+
+    await cb_greeting_settings(call)
+
+@router.callback_query(F.data == "select_greeting_cooldown")
+async def cb_select_greeting_cooldown(call: CallbackQuery):
+    await call.message.edit_text(
+        "⏱ **Выберите необходимый интервал неактивности:**\n\n"
+        "Если покупатель не писал вам дольше выбранного времени и затем отправит новое сообщение, "
+        "бот отправит ему повторное приветствие.",
+        reply_markup=get_cooldown_presets_kb(),
+        parse_mode="Markdown"
+    )
+
+@router.callback_query(F.data.startswith("set_g_cd_"))
+async def cb_set_greeting_cooldown(call: CallbackQuery):
+    hours_str = call.data.replace("set_g_cd_", "")
+    try:
+        hours = float(hours_str)
+    except ValueError:
+        hours = 168.0
+
+    async with AsyncSessionLocal() as session:
+        res = await session.execute(select(BotSetting).where(BotSetting.key == "auto_greeting_cooldown_hours"))
+        setting = res.scalar_one_or_none()
+        if setting:
+            setting.value = str(hours)
+        else:
+            session.add(BotSetting(key="auto_greeting_cooldown_hours", value=str(hours)))
+        await session.commit()
+
+    await cb_greeting_settings(call)
+
+@router.callback_query(F.data == "custom_greeting_cooldown")
+async def cb_custom_greeting_cooldown(call: CallbackQuery, state: FSMContext):
+    await state.set_state(GreetingEditState.waiting_for_custom_cooldown)
+    await call.message.edit_text(
+        "✏️ **Введите интервал неактивности в часах:**\n\n"
+        "Примеры ввода:\n"
+        "`24` — 1 день\n"
+        "`168` — 1 неделя\n"
+        "`0.5` — 30 минут",
         reply_markup=get_back_kb(),
         parse_mode="Markdown"
     )
 
-@router.message(BroadcastState.waiting_for_text)
-async def process_broadcast_text(message: Message, state: FSMContext):
-    text_to_broadcast = message.text.strip()
-    if not text_to_broadcast:
-        await message.answer("⚠️ Пустой текст рассылки.")
+@router.message(GreetingEditState.waiting_for_custom_cooldown)
+async def process_custom_cooldown(message: Message, state: FSMContext):
+    text = message.text.strip()
+    try:
+        val = float(text.replace(",", "."))
+        if val <= 0:
+            raise ValueError
+    except ValueError:
+        await message.answer("⚠️ Пожалуйста, введите положительное число часов (например: 24, 72 или 168).")
         return
 
     async with AsyncSessionLocal() as session:
-        res = await session.execute(select(OrderHistory.buyer_id).distinct())
-        buyer_ids = [r[0] for r in res.all() if r[0]]
-
-    sent_count = 0
-    client = get_client()
-    if client and buyer_ids:
-        for b_id in buyer_ids:
-            try:
-                ok = await client.send_message(b_id, text_to_broadcast)
-                if ok:
-                    sent_count += 1
-            except Exception:
-                pass
+        res = await session.execute(select(BotSetting).where(BotSetting.key == "auto_greeting_cooldown_hours"))
+        setting = res.scalar_one_or_none()
+        if setting:
+            setting.value = str(val)
+        else:
+            session.add(BotSetting(key="auto_greeting_cooldown_hours", value=str(val)))
+        await session.commit()
 
     await state.clear()
     await message.answer(
-        f"🎉 **Рассылка завершена!** Сообщение доставлено `{sent_count}` покупателям.",
+        f"✅ **Интервал неактивности сохранен:** `{format_cooldown_label(val)}`",
         reply_markup=get_back_kb(),
         parse_mode="Markdown"
     )
 
-# --- 6. Edit Greeting Message ---
+@router.callback_query(F.data == "edit_greeting_primary")
 @router.callback_query(F.data == "edit_feature_greeting")
-async def cb_edit_greeting(call: CallbackQuery, state: FSMContext):
+async def cb_edit_greeting_primary(call: CallbackQuery, state: FSMContext):
     await state.set_state(GreetingEditState.waiting_for_text)
     await call.message.edit_text(
-        "✏️ **Редактирование приветственного сообщения:**\n\n"
-        "Введите новый текст приветствия.\n"
+        "✏️ **Редактирование ПЕРВИЧНОГО приветственного сообщения:**\n\n"
+        "Отправляется новым покупателям при первом сообщении.\n"
         "💡 *Вы можете использовать макрос* `{buyer_name}` *для имени покупателя.*\n\n"
         "Пример:\n"
         "`👋 Здравствуйте, {buyer_name}! Рады видеть вас в магазине. Чем могу помочь?`",
+        reply_markup=get_back_kb(),
+        parse_mode="Markdown"
+    )
+
+@router.callback_query(F.data == "edit_greeting_secondary")
+async def cb_edit_greeting_secondary(call: CallbackQuery, state: FSMContext):
+    await state.set_state(GreetingEditState.waiting_for_regreeting_text)
+    await call.message.edit_text(
+        "✏️ **Редактирование ПОТОРНОГО приветственного сообщения:**\n\n"
+        "Отправляется покупателям, вернувшимся после длительной паузы неактивности.\n"
+        "💡 *Вы можете использовать макрос* `{buyer_name}` *для имени покупателя.*\n\n"
+        "Пример:\n"
+        "`👋 С возвращением, {buyer_name}! Снова рады видеть вас. Чем можем помочь?`",
         reply_markup=get_back_kb(),
         parse_mode="Markdown"
     )
@@ -325,7 +504,30 @@ async def process_new_greeting(message: Message, state: FSMContext):
 
     await state.clear()
     await message.answer(
-        f"✅ **Приветственное сообщение успешно сохранено!**\n\n`{new_text}`",
+        f"✅ **Первичное приветствие успешно сохранено!**\n\n`{new_text}`",
+        reply_markup=get_back_kb(),
+        parse_mode="Markdown"
+    )
+
+@router.message(GreetingEditState.waiting_for_regreeting_text)
+async def process_new_regreeting(message: Message, state: FSMContext):
+    new_text = message.text.strip()
+    if not new_text:
+        await message.answer("⚠️ Текст приветствия не может быть пустым.")
+        return
+
+    async with AsyncSessionLocal() as session:
+        res = await session.execute(select(BotSetting).where(BotSetting.key == "auto_regreeting_text"))
+        setting = res.scalar_one_or_none()
+        if setting:
+            setting.value = new_text
+        else:
+            session.add(BotSetting(key="auto_regreeting_text", value=new_text))
+        await session.commit()
+
+    await state.clear()
+    await message.answer(
+        f"✅ **Повторное приветствие успешно сохранено!**\n\n`{new_text}`",
         reply_markup=get_back_kb(),
         parse_mode="Markdown"
     )

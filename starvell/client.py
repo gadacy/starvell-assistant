@@ -106,8 +106,11 @@ class StarvellClient:
                     self._build_id_fetched_at = now
                     page_props = data.get("props", {}).get("pageProps", {})
                     u_info = page_props.get("user", {})
-                    if u_info and isinstance(u_info, dict) and u_info.get("publicId"):
-                        self.public_id = u_info.get("publicId")
+                    if u_info and isinstance(u_info, dict):
+                        if u_info.get("publicId"):
+                            self.public_id = str(u_info.get("publicId"))
+                        if u_info.get("id"):
+                            self.user_id = str(u_info.get("id"))
                     logger.info(f"[StarvellClient] Next.js Build ID extracted: {self._build_id}")
                     return self._build_id
         except Exception as e:
@@ -133,8 +136,11 @@ class StarvellClient:
                 data = res.json()
                 page_props = data.get("pageProps", {})
                 u_info = page_props.get("user", {})
-                if u_info and isinstance(u_info, dict) and u_info.get("publicId"):
-                    self.public_id = u_info.get("publicId")
+                if u_info and isinstance(u_info, dict):
+                    if u_info.get("publicId"):
+                        self.public_id = str(u_info.get("publicId"))
+                    if u_info.get("id"):
+                        self.user_id = str(u_info.get("id"))
                 return data
         except Exception as e:
             self._log_once(f"next_data_{path}", "warning", f"[StarvellClient] Ошибка Next.js Data API ({path}): {e}")
