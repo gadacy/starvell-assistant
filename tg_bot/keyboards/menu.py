@@ -107,6 +107,9 @@ def get_notifications_kb(settings: dict) -> InlineKeyboardMarkup:
             )
         ],
         [
+            InlineKeyboardButton(text="🧪 Проверить уведомление о покупке", callback_data="test_purchase_notification")
+        ],
+        [
             InlineKeyboardButton(text="◀️ Главное меню", callback_data="menu_main")
         ]
     ])

@@ -1,5 +1,8 @@
 import asyncio
-from typing import Callable, List, Set, Dict, Any, Awaitable
+from typing import Callable, List, Set, Dict, Any, Awaitable, Optional
+from sqlalchemy import select
+from core.database.base import AsyncSessionLocal
+from core.database.models import OrderHistory
 from core.logger import logger
 from starvell.client import StarvellClient
 from starvell.models import StarvellEvent, StarvellMessage, StarvellOrder
@@ -9,7 +12,7 @@ EventHandler = Callable[[StarvellEvent], Awaitable[None]]
 class StarvellListener:
     """
     Background event listener for Starvell.
-    Monitors new chat messages and new orders / status updates.
+    Monitors new chat messages, notification events, and new orders / status updates.
     """
     def __init__(self, client: StarvellClient, poll_interval: float = 3.0):
         self.client = client
@@ -34,10 +37,25 @@ class StarvellListener:
             except Exception as e:
                 logger.error(f"[StarvellListener] Exception in event handler: {e}")
 
+    async def init_seen_state(self):
+        """Pre-seed seen orders from database to prevent re-alerting on bot startup."""
+        try:
+            async with AsyncSessionLocal() as session:
+                res = await session.execute(select(OrderHistory))
+                orders_db = res.scalars().all()
+                for o in orders_db:
+                    if o.order_id:
+                        self._seen_orders[str(o.order_id)] = str(o.status or "completed").lower()
+            if self._seen_orders:
+                logger.info(f"[StarvellListener] Pre-seeded {len(self._seen_orders)} known orders from database.")
+        except Exception as e:
+            logger.warning(f"[StarvellListener] Error pre-seeding orders from DB: {e}")
+
     async def start(self):
         if self._is_running:
             return
         self._is_running = True
+        await self.init_seen_state()
         self._task = asyncio.create_task(self._listen_loop())
         logger.info("[StarvellListener] Event listener started.")
 
@@ -84,7 +102,7 @@ class StarvellListener:
                         chat_id=order.chat_id or order.buyer_id,
                         order=order
                     )
-                    logger.info(f"[StarvellListener] Order event detected: {order.id} -> {status_str}")
+                    logger.info(f"[StarvellListener] Order event detected: {order.id} -> {status_str} ({order.lot_title[:30]})")
                     await self._emit(event)
 
             self._orders_initialized = True
@@ -156,6 +174,10 @@ class StarvellListener:
                 if not msg_id:
                     continue
 
+                msg_type = str(last_msg.get("type") or "").upper()
+                meta = last_msg.get("metadata") if isinstance(last_msg.get("metadata"), dict) else {}
+                ntype = str(meta.get("notificationType") or "").upper()
+
                 if msg_id in self._seen_messages:
                     continue
 
@@ -173,22 +195,80 @@ class StarvellListener:
                     await self._emit(event)
                     continue
 
-                author_id = str(last_msg.get("authorId", last_msg.get("sender_id", "")))
+                # Buyer name extraction
                 sender_name = "Покупатель"
-                participants = chat.get("participants", [])
-                if isinstance(participants, list):
-                    for p in participants:
-                        if isinstance(p, dict):
-                            p_pub = str(p.get("publicId", ""))
-                            p_id = str(p.get("id", ""))
-                            if (not my_public_id or p_pub != my_public_id) and (not my_user_id or p_id != my_user_id):
-                                sender_name = p.get("username", "Покупатель")
-                                break
+                buyer_obj = last_msg.get("buyer") if isinstance(last_msg.get("buyer"), dict) else {}
+                if buyer_obj.get("username"):
+                    sender_name = buyer_obj.get("username")
+                else:
+                    participants = chat.get("participants", [])
+                    if isinstance(participants, list):
+                        for p in participants:
+                            if isinstance(p, dict):
+                                p_pub = str(p.get("publicId", ""))
+                                p_id = str(p.get("id", ""))
+                                if (not my_public_id or p_pub != my_public_id) and (not my_user_id or p_id != my_user_id):
+                                    sender_name = p.get("username", "Покупатель")
+                                    break
 
+                # 1. Handle NOTIFICATION type (order updates, reviews, purchases)
+                if msg_type == "NOTIFICATION" or ntype:
+                    ord_obj = last_msg.get("order") if isinstance(last_msg.get("order"), dict) else None
+                    order_id = str(ord_obj.get("shortId") or ord_obj.get("id") or meta.get("orderShortId") or meta.get("orderId") or "")
+                    
+                    if ntype in ["ORDER_CREATED", "ORDER_PAID", "ORDER_NEW", "ORDER_PAYMENT"]:
+                        status_str = "paid"
+                    elif ntype in ["ORDER_COMPLETED", "ORDER_SELLER_COMPLETED", "ORDER_BUYER_CONFIRMED"]:
+                        status_str = "completed"
+                    elif ntype in ["ORDER_CANCELLED", "ORDER_REFUNDED"]:
+                        status_str = "refunded"
+                    elif ntype == "REVIEW_CREATED":
+                        status_str = "review"
+                    else:
+                        status_str = "paid"
+
+                    if order_id and status_str != "review":
+                        last_st = self._seen_orders.get(order_id)
+                        if last_st != status_str:
+                            self._seen_orders[order_id] = status_str
+
+                            # Lot title & qty
+                            qty = int(ord_obj.get("quantity", 1)) if ord_obj else 1
+                            lot_title = f"Заказ #{order_id}"
+                            lot_id = order_id
+                            if ord_obj:
+                                off = ord_obj.get("offerDetails") if isinstance(ord_obj.get("offerDetails"), dict) else {}
+                                descs = off.get("descriptions", {}).get("rus", {}) if isinstance(off.get("descriptions"), dict) else {}
+                                lot_title = descs.get("briefDescription") or descs.get("description") or lot_title
+                                lot_id = str(ord_obj.get("offerId") or off.get("id") or order_id)
+
+                            order_model = StarvellOrder(
+                                id=order_id,
+                                buyer_id=str(buyer_obj.get("id") or ""),
+                                buyer_name=sender_name,
+                                lot_id=lot_id,
+                                lot_title=lot_title,
+                                amount=qty,
+                                price=0.0,
+                                total_price=0.0,
+                                status=status_str,
+                                chat_id=chat_id
+                            )
+                            event = StarvellEvent(
+                                event_type=f"order_{status_str}",
+                                chat_id=chat_id,
+                                order=order_model
+                            )
+                            logger.info(f"[StarvellListener] Notification event for order #{order_id} ({status_str}) in chat {chat_id}")
+                            await self._emit(event)
+                            continue
+
+                # 2. Handle standard chat text message
                 text_content = last_msg.get("content") or last_msg.get("text") or ""
                 if not text_content:
                     continue
 
+                author_id = str(last_msg.get("authorId", last_msg.get("sender_id", "")))
                 msg_obj = StarvellMessage(
                     id=msg_id,
                     chat_id=chat_id,
@@ -208,3 +288,4 @@ class StarvellListener:
             self._messages_initialized = True
         except Exception as e:
             logger.error(f"[StarvellListener] Error checking messages: {e}")
+

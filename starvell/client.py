@@ -272,88 +272,20 @@ class StarvellClient:
         if isinstance(items, list):
             from datetime import datetime
             for it in items:
-                if isinstance(it, dict) and it.get("direction") == "INCOME" and it.get("type") == "ORDER_FULFILLMENT":
-                    short_id = it.get("orderShortId") or str(it.get("orderId") or it.get("id"))
-                    raw_dt = it.get("createdAt") or it.get("created_at")
-                    dt_val = datetime.utcnow()
-                    if raw_dt:
-                        try:
-                            if isinstance(raw_dt, datetime):
-                                dt_val = raw_dt
-                            elif isinstance(raw_dt, str):
-                                dt_val = datetime.fromisoformat(raw_dt.replace("Z", "+00:00")).replace(tzinfo=None)
-                        except Exception:
-                            pass
-
-                    # Amount in wallet.json is in kopecks
-                    raw_amount = float(it.get("amount", 0)) / 100.0
-
-                    orders.append(StarvellOrder(
-                        id=short_id,
-                        buyer_id=str(it.get("userId", "")),
-                        buyer_name="Покупатель",
-                        lot_id=short_id,
-                        lot_title=f"Заказ #{short_id}",
-                        amount=1,
-                        price=raw_amount,
-                        total_price=raw_amount,
-                        status="completed" if it.get("status") == "COMPLETED" else "paid",
-                        created_at=dt_val
-                    ))
-        return orders
-
-    async def get_orders(self, status: Optional[str] = None) -> List[StarvellOrder]:
-        if self.is_simulation:
-            return []
-            
-        orders_map = {}
-        
-        # 1. Fetch wallet transactions (most complete record of sales)
-        try:
-            wallet_orders = await self.get_wallet_transactions()
-            for wo in wallet_orders:
-                orders_map[wo.id] = wo
-        except Exception as e:
-            logger.warning(f"[StarvellClient] Error fetching wallet transactions: {e}")
-
-        raw_orders = []
-
-        # 2. Fetch index.json pageProps
-        try:
-            data = await self.get_next_data("index.json")
-            page_props = data.get("pageProps", {})
-            idx_orders = page_props.get("salesOrders") or page_props.get("recentOrders") or page_props.get("orders") or []
-            if isinstance(idx_orders, list):
-                raw_orders.extend(idx_orders)
-        except Exception:
-            pass
-
-        # 3. Fetch chat.json pageProps for chat orders
-        try:
-            data_chat = await self.get_next_data("chat.json")
-            page_props_chat = data_chat.get("pageProps", {})
-            chats = page_props_chat.get("chats") or page_props_chat.get("initialChats") or []
-            if isinstance(chats, list):
-                for c in chats:
-                    if isinstance(c, dict):
-                        c_id = str(c.get("id", ""))
-                        o = c.get("order") or c.get("lastOrder") or c.get("activeOrder") or c.get("salesOrder")
-                        if o and isinstance(o, dict):
-                            o_copy = dict(o)
-                            if c_id and not o_copy.get("chatId"):
-                                o_copy["chatId"] = c_id
-                            raw_orders.append(o_copy)
-        except Exception:
-            pass
-
-        from datetime import datetime
-        for item in raw_orders:
-            if isinstance(item, dict):
-                order_id = str(item.get("publicId") or item.get("shortId") or item.get("id") or item.get("orderId") or "")
-                if not order_id:
+                if not isinstance(it, dict):
                     continue
 
-                raw_dt = item.get("createdAt") or item.get("created_at")
+                order_short_id = str(it.get("orderShortId") or "")
+                order_full_id = str(it.get("orderId") or "")
+                raw_id = order_short_id or order_full_id or str(it.get("id") or "")
+                
+                # Check if this transaction is related to an order
+                tx_type = str(it.get("type") or "").upper()
+                is_order_tx = bool(order_short_id or order_full_id or "ORDER" in tx_type or "DEAL" in tx_type or "SALE" in tx_type)
+                if not is_order_tx:
+                    continue
+
+                raw_dt = it.get("createdAt") or it.get("created_at")
                 dt_val = datetime.utcnow()
                 if raw_dt:
                     try:
@@ -364,44 +296,248 @@ class StarvellClient:
                     except Exception:
                         pass
 
-                raw_total = float(item.get("totalPrice", item.get("total_price", item.get("price", 0))))
-                raw_single = float(item.get("price", raw_total))
+                # Amount in wallet.json is in kopecks (e.g. 1800 -> 18.00 RUB)
+                raw_amt = float(it.get("amount", 0))
+                price_rub = raw_amt / 100.0 if raw_amt > 0 else 0.0
 
-                raw_status = str(item.get("status") or item.get("orderStatus") or "paid").lower()
-                if raw_status in ["paid", "new", "created", "pending", "in_progress", "waiting", "unfulfilled", "processing"]:
-                    norm_status = "paid"
-                elif raw_status in ["completed", "confirmed", "fulfilled", "done", "success"]:
+                raw_status = str(it.get("status") or "").upper()
+                if raw_status in ["COMPLETED", "CONFIRMED", "FULFILLED", "SUCCESS"]:
                     norm_status = "completed"
-                elif raw_status in ["canceled", "cancelled", "refunded"]:
+                elif raw_status in ["HOLD", "PENDING", "PROCESSING", "PAID", "NEW", "WAITING"]:
+                    norm_status = "paid"
+                elif raw_status in ["CANCELED", "CANCELLED", "REFUNDED", "REJECTED"]:
                     norm_status = "refunded"
                 else:
-                    norm_status = raw_status
+                    norm_status = "paid"
 
-                buyer_obj = item.get("buyer") if isinstance(item.get("buyer"), dict) else item.get("user") if isinstance(item.get("user"), dict) else {}
-                buyer_name = item.get("buyerName") or item.get("buyer_name") or buyer_obj.get("username") or buyer_obj.get("name") or "Покупатель"
-                buyer_id = str(item.get("buyerId") or item.get("buyer_id") or buyer_obj.get("publicId") or buyer_obj.get("id") or "")
+                orders.append(StarvellOrder(
+                    id=raw_id,
+                    buyer_id=str(it.get("userId", "")),
+                    buyer_name="Покупатель",
+                    lot_id=raw_id,
+                    lot_title=f"Заказ #{raw_id}",
+                    amount=1,
+                    price=price_rub,
+                    total_price=price_rub,
+                    status=norm_status,
+                    created_at=dt_val
+                ))
+        return orders
 
-                offer_obj = item.get("offer") if isinstance(item.get("offer"), dict) else item.get("lot") if isinstance(item.get("lot"), dict) else {}
-                lot_title = item.get("offerTitle") or item.get("lot_title") or offer_obj.get("title") or offer_obj.get("name") or "Цифровой товар"
-                lot_id = str(item.get("offerId") or item.get("lot_id") or offer_obj.get("id") or offer_obj.get("publicId") or "")
+    async def get_orders(self, status: Optional[str] = None) -> List[StarvellOrder]:
+        if self.is_simulation:
+            return []
 
-                chat_id_val = str(item.get("chatId") or item.get("chat_id") or "")
+        orders_map: Dict[str, StarvellOrder] = {}
+        wallet_meta_by_id: Dict[str, Dict[str, Any]] = {}
 
-                # Update or add if not present, or if active order status is newer
-                if order_id not in orders_map or norm_status == "paid":
-                    orders_map[order_id] = StarvellOrder(
-                        id=order_id,
+        # 1. Fetch wallet transactions to get exact financial amounts and timestamps
+        try:
+            data_wallet = await self.get_next_data("wallet.json")
+            page_props_w = data_wallet.get("pageProps", {})
+            tx_data = page_props_w.get("transactions", {})
+            items = tx_data.get("items", []) if isinstance(tx_data, dict) else []
+            if isinstance(items, list):
+                from datetime import datetime
+                for it in items:
+                    if isinstance(it, dict):
+                        s_id = str(it.get("orderShortId") or "")
+                        f_id = str(it.get("orderId") or "")
+                        raw_amt = float(it.get("amount", 0))
+                        price_rub = raw_amt / 100.0 if raw_amt > 0 else 0.0
+                        
+                        raw_dt = it.get("createdAt") or it.get("created_at")
+                        dt_val = datetime.utcnow()
+                        if raw_dt:
+                            try:
+                                if isinstance(raw_dt, datetime):
+                                    dt_val = raw_dt
+                                elif isinstance(raw_dt, str):
+                                    dt_val = datetime.fromisoformat(raw_dt.replace("Z", "+00:00")).replace(tzinfo=None)
+                            except Exception:
+                                pass
+
+                        raw_st = str(it.get("status") or "").upper()
+                        if raw_st in ["COMPLETED", "CONFIRMED", "FULFILLED", "SUCCESS"]:
+                            st_val = "completed"
+                        elif raw_st in ["HOLD", "PENDING", "PROCESSING", "PAID", "NEW", "WAITING"]:
+                            st_val = "paid"
+                        elif raw_st in ["CANCELED", "CANCELLED", "REFUNDED"]:
+                            st_val = "refunded"
+                        else:
+                            st_val = "paid"
+
+                        meta = {
+                            "price": price_rub,
+                            "created_at": dt_val,
+                            "status": st_val,
+                            "short_id": s_id,
+                            "full_id": f_id
+                        }
+                        if s_id:
+                            wallet_meta_by_id[s_id] = meta
+                        if f_id:
+                            wallet_meta_by_id[f_id] = meta
+        except Exception as e:
+            logger.warning(f"[StarvellClient] Error fetching wallet transactions: {e}")
+
+        # 2. Extract orders from chat.json (chats contain order objects, offer details, and buyer info)
+        try:
+            data_chat = await self.get_next_data("chat.json")
+            page_props_chat = data_chat.get("pageProps", {})
+            chats = page_props_chat.get("chats") or page_props_chat.get("initialChats") or []
+            if isinstance(chats, list):
+                from datetime import datetime
+                for c in chats:
+                    if not isinstance(c, dict):
+                        continue
+                    chat_id = str(c.get("id", ""))
+                    lm = c.get("lastMessage") if isinstance(c.get("lastMessage"), dict) else {}
+                    meta = lm.get("metadata") if isinstance(lm.get("metadata"), dict) else {}
+                    ord_obj = lm.get("order") if isinstance(lm.get("order"), dict) else c.get("order") if isinstance(c.get("order"), dict) else None
+
+                    order_id = ""
+                    order_short_id = ""
+                    if ord_obj:
+                        order_id = str(ord_obj.get("id") or "")
+                        order_short_id = str(ord_obj.get("shortId") or "")
+                    if not order_id and meta.get("orderId"):
+                        order_id = str(meta.get("orderId"))
+                    if not order_short_id and meta.get("orderShortId"):
+                        order_short_id = str(meta.get("orderShortId"))
+
+                    primary_id = order_short_id or order_id
+                    if not primary_id:
+                        continue
+
+                    # Buyer name extraction
+                    buyer_obj = lm.get("buyer") if isinstance(lm.get("buyer"), dict) else {}
+                    buyer_name = buyer_obj.get("username") or buyer_obj.get("displayName") or buyer_obj.get("name")
+                    buyer_id = str(buyer_obj.get("id") or ord_obj.get("buyerId") if ord_obj else "")
+
+                    if not buyer_name:
+                        parts = c.get("participants", [])
+                        if isinstance(parts, list):
+                            my_pub = str(self.public_id or "")
+                            my_uid = str(getattr(self, 'user_id', '') or '')
+                            for p in parts:
+                                if isinstance(p, dict):
+                                    p_pub = str(p.get("publicId", ""))
+                                    p_id = str(p.get("id", ""))
+                                    if (not my_pub or p_pub != my_pub) and (not my_uid or p_id != my_uid):
+                                        buyer_name = p.get("username") or p.get("displayName") or "Покупатель"
+                                        if not buyer_id:
+                                            buyer_id = p_id
+                                        break
+                    if not buyer_name:
+                        buyer_name = "Покупатель"
+
+                    # Lot title extraction
+                    lot_title = ""
+                    lot_id = ""
+                    qty = 1
+                    if ord_obj:
+                        qty = int(ord_obj.get("quantity") or 1)
+                        off = ord_obj.get("offerDetails") if isinstance(ord_obj.get("offerDetails"), dict) else {}
+                        descs = off.get("descriptions", {}).get("rus", {}) if isinstance(off.get("descriptions"), dict) else {}
+                        lot_title = descs.get("briefDescription") or descs.get("description") or ""
+                        if not lot_title:
+                            g_name = off.get("game", {}).get("name", "")
+                            c_name = off.get("category", {}).get("name", "")
+                            if g_name or c_name:
+                                lot_title = f"{g_name} - {c_name}".strip(" -")
+                        lot_id = str(ord_obj.get("offerId") or off.get("id") or primary_id)
+
+                    if not lot_title:
+                        lot_title = f"Заказ #{primary_id}"
+                    if not lot_id:
+                        lot_id = primary_id
+
+                    # Determine status from notificationType or metadata
+                    ntype = str(meta.get("notificationType") or "").upper()
+                    if ntype in ["ORDER_CREATED", "ORDER_PAID", "ORDER_NEW", "ORDER_PAYMENT"]:
+                        norm_status = "paid"
+                    elif ntype in ["ORDER_COMPLETED", "ORDER_SELLER_COMPLETED", "ORDER_BUYER_CONFIRMED", "REVIEW_CREATED"]:
+                        norm_status = "completed"
+                    elif ntype in ["ORDER_CANCELLED", "ORDER_REFUNDED"]:
+                        norm_status = "refunded"
+                    else:
+                        norm_status = "paid"
+
+                    # Check wallet info for price and status override if present
+                    w_info = wallet_meta_by_id.get(order_short_id) or wallet_meta_by_id.get(order_id) or {}
+                    price_val = w_info.get("price", 0.0)
+                    dt_val = w_info.get("created_at") or datetime.utcnow()
+                    if w_info.get("status"):
+                        norm_status = w_info["status"]
+
+                    # If created_at is available in lastMessage
+                    msg_dt_str = lm.get("createdAt")
+                    if msg_dt_str and not w_info.get("created_at"):
+                        try:
+                            dt_val = datetime.fromisoformat(msg_dt_str.replace("Z", "+00:00")).replace(tzinfo=None)
+                        except Exception:
+                            pass
+
+                    order_item = StarvellOrder(
+                        id=primary_id,
                         buyer_id=buyer_id,
                         buyer_name=buyer_name,
                         lot_id=lot_id,
                         lot_title=lot_title,
-                        amount=int(item.get("amount", 1)),
-                        price=raw_single,
-                        total_price=raw_total,
+                        amount=qty,
+                        price=price_val,
+                        total_price=price_val,
                         status=norm_status,
                         created_at=dt_val,
-                        chat_id=chat_id_val
+                        chat_id=chat_id
                     )
+                    orders_map[primary_id] = order_item
+        except Exception as e:
+            logger.warning(f"[StarvellClient] Error extracting orders from chat.json: {e}")
+
+        # 3. Add any wallet orders not found in chats
+        for w_id, w_info in wallet_meta_by_id.items():
+            s_id = w_info.get("short_id") or w_id
+            if s_id not in orders_map and w_info.get("full_id") not in orders_map:
+                orders_map[s_id] = StarvellOrder(
+                    id=s_id,
+                    buyer_id="",
+                    buyer_name="Покупатель",
+                    lot_id=s_id,
+                    lot_title=f"Заказ #{s_id}",
+                    amount=1,
+                    price=w_info["price"],
+                    total_price=w_info["price"],
+                    status=w_info["status"],
+                    created_at=w_info["created_at"]
+                )
+
+        # 4. Fallback check index.json
+        try:
+            data_idx = await self.get_next_data("index.json")
+            page_props_idx = data_idx.get("pageProps", {})
+            idx_orders = page_props_idx.get("salesOrders") or page_props_idx.get("recentOrders") or page_props_idx.get("orders") or []
+            if isinstance(idx_orders, list):
+                for item in idx_orders:
+                    if isinstance(item, dict):
+                        o_id = str(item.get("shortId") or item.get("publicId") or item.get("id") or "")
+                        if o_id and o_id not in orders_map:
+                            raw_p = float(item.get("totalPrice", item.get("price", 0.0)))
+                            orders_map[o_id] = StarvellOrder(
+                                id=o_id,
+                                buyer_id=str(item.get("buyerId", "")),
+                                buyer_name=item.get("buyerName", "Покупатель"),
+                                lot_id=str(item.get("offerId", o_id)),
+                                lot_title=item.get("offerTitle", f"Заказ #{o_id}"),
+                                amount=int(item.get("amount", 1)),
+                                price=raw_p,
+                                total_price=raw_p,
+                                status=str(item.get("status", "paid")).lower(),
+                                created_at=datetime.utcnow()
+                            )
+        except Exception:
+            pass
 
         orders_list = list(orders_map.values())
         if status:

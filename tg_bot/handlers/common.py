@@ -219,6 +219,50 @@ async def cb_toggle_notify(call: CallbackQuery):
 
     await handle_notifications_menu(call)
 
+# --- Test Purchase Notification ---
+@router.message(Command("test_order"))
+@router.callback_query(F.data == "test_purchase_notification")
+async def handle_test_purchase(event: Message | CallbackQuery):
+    user_id = event.from_user.id
+    if not is_admin(user_id):
+        return
+
+    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+    import random
+
+    test_id = f"TEST{random.randint(1000, 9999)}"
+    test_buyer = "StarvellBuyer_Demo"
+    test_title = "Roblox Аккаунт 2012 Года [VIP / БЕЗ ПРИВЯЗОК]"
+    test_price = 150.00
+    test_chat_id = "demo_chat_123"
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="✉️ Ответить", callback_data=f"reply_chat_{test_chat_id}"),
+            InlineKeyboardButton(text="📝 Заготовки", callback_data=f"quick_replies_{test_chat_id}")
+        ],
+        [
+            InlineKeyboardButton(text="🌐 Открыть чат / заказ", url="https://starvell.com"),
+            InlineKeyboardButton(text="💸 Возврат средств", callback_data=f"refund_order_{test_id}")
+        ]
+    ])
+
+    test_msg = (
+        "🧪 <b>[ТЕСТОВОЕ ОПОВЕЩЕНИЕ]</b>\n\n"
+        "🛍 <b>Новая покупка на Starvell!</b>\n\n"
+        f"📦 <b>Товар:</b> {test_title}\n"
+        f"👤 <b>Покупатель:</b> <a href='https://starvell.com/profile/{test_buyer}'>{test_buyer}</a>\n"
+        f"💵 <b>Сумма:</b> {test_price:.2f} ₽\n"
+        f"🆔 <b>ID Заказа:</b> <code>#{test_id}</code>\n\n"
+        "⚡ <b>Авто-выдача:</b> <i>Тестовый заказ. Детекция и отправка уведомлений работают отлично!</i>"
+    )
+
+    if isinstance(event, CallbackQuery):
+        await event.answer("✅ Тестовое уведомление отправлено!", show_alert=False)
+        await event.message.answer(test_msg, reply_markup=kb, parse_mode="HTML", disable_web_page_preview=True)
+    else:
+        await event.answer(test_msg, reply_markup=kb, parse_mode="HTML", disable_web_page_preview=True)
+
 # --- Update Checker & Self-Restart Handlers ---
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 import asyncio

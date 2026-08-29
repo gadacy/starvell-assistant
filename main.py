@@ -100,7 +100,7 @@ async def run_bot_instance() -> bool:
             if bot_inst and cfg.telegram_admin_ids:
                 import html
                 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-                from core.database.models import StockItem
+                from core.database.models import StockItem, AutoResponse
 
                 safe_id = html.escape(str(order.id))
                 safe_title = html.escape(str(order.lot_title or "Товар"))
@@ -108,49 +108,81 @@ async def run_bot_instance() -> bool:
                 price = order.total_price or order.price or 0.0
 
                 chat_id = order.chat_id or order.buyer_id
-                order_url = f"https://starvell.com/chat/{chat_id}" if chat_id else f"https://starvell.com/orders/{safe_id}"
+                order_url = f"https://starvell.com/chat/{chat_id}" if chat_id else f"https://starvell.com"
 
-                buttons = [
-                    [InlineKeyboardButton(text="💸 Вернуть деньги", callback_data=f"refund_order_{safe_id}")],
-                    [InlineKeyboardButton(text="🌐 Открыть страницу заказа", url=order_url)]
-                ]
+                buttons = []
                 if chat_id:
                     buttons.append([
                         InlineKeyboardButton(text="✉️ Ответить", callback_data=f"reply_chat_{chat_id}"),
                         InlineKeyboardButton(text="📝 Заготовки", callback_data=f"quick_replies_{chat_id}")
                     ])
+                buttons.append([
+                    InlineKeyboardButton(text="🌐 Открыть чат / заказ", url=order_url),
+                    InlineKeyboardButton(text="💸 Возврат средств", callback_data=f"refund_order_{safe_id}")
+                ])
 
                 kb = InlineKeyboardMarkup(inline_keyboard=buttons)
 
                 if status in ["paid", "new"]:
                     async with AsyncSessionLocal() as db_session:
+                        # Check auto delivery setting
+                        res_ad = await db_session.execute(select(BotSetting).where(BotSetting.key == "auto_delivery_enabled"))
+                        set_ad = res_ad.scalar_one_or_none()
+                        ad_enabled = set_ad.value.lower() == "true" if set_ad else True
+
                         stock_res = await db_session.execute(
                             select(StockItem).where(StockItem.lot_id == str(order.lot_id), StockItem.is_used == False).limit(1)
                         )
                         has_stock = stock_res.scalar_one_or_none() is not None
 
-                    if has_stock:
-                        delivery_info = "⚡ <i>Товар успешно выдан авто-выдачей.</i>"
+                        template_res = await db_session.execute(
+                            select(AutoResponse).where(
+                                AutoResponse.trigger_type == "order_paid",
+                                AutoResponse.lot_id == str(order.lot_id),
+                                AutoResponse.is_active == True
+                            ).limit(1)
+                        )
+                        has_template = template_res.scalar_one_or_none() is not None
+
+                    if not ad_enabled:
+                        delivery_info = "ℹ️ <b>Авто-выдача:</b> <i>Отключена в настройках бота.</i>"
+                    elif has_stock or has_template:
+                        delivery_info = "⚡ <b>Авто-выдача:</b> <i>Товар выдается автоматически!</i>"
                     else:
-                        delivery_info = "ℹ️ <i>Товар не будет выдан, т.к. к лоту не привязана авто-выдача.</i>"
+                        delivery_info = "⚠️ <b>Авто-выдача:</b> <i>Нет привязанного ключа/шаблона. Требуется ручная выдача!</i>"
+
+                    qty_str = f"🔢 <b>Количество:</b> {order.amount} шт.\n" if order.amount and order.amount > 1 else ""
+                    buyer_str = f"<a href='https://starvell.com/profile/{safe_buyer}'>{safe_buyer}</a>" if safe_buyer != "Покупатель" else safe_buyer
 
                     msg_text = (
-                        f"💰 <b>Новый заказ:</b> {safe_title}\n\n"
-                        f"👤 <b>Покупатель:</b> {safe_buyer}\n"
+                        f"🛍 <b>Новая покупка на Starvell!</b>\n\n"
+                        f"📦 <b>Товар:</b> {safe_title}\n"
+                        f"👤 <b>Покупатель:</b> {buyer_str}\n"
                         f"💵 <b>Сумма:</b> {price:.2f} ₽\n"
-                        f"🆔 <b>ID:</b> #{safe_id}\n\n"
+                        f"{qty_str}"
+                        f"🆔 <b>ID Заказа:</b> <code>#{safe_id}</code>\n\n"
                         f"{delivery_info}"
                     )
                 elif status == "completed":
-                    msg_text = f"🌕 Пользователь <b>{safe_buyer}</b> подтвердил выполнение заказа <b>{safe_id}</b>. ({price:.2f} ₽)"
+                    msg_text = (
+                        f"🌕 <b>Заказ #{safe_id} подтвержден!</b>\n\n"
+                        f"👤 Пользователь <b>{safe_buyer}</b> подтвердил выполнение заказа.\n"
+                        f"📦 <b>Товар:</b> {safe_title}\n"
+                        f"💵 <b>Сумма:</b> {price:.2f} ₽"
+                    )
                 elif status in ["cancelled", "canceled", "refunded"]:
-                    msg_text = f"❌ Пользователь <b>{safe_buyer}</b> или администратор отменил заказ <b>{safe_id}</b>. ({price:.2f} ₽)"
+                    msg_text = (
+                        f"❌ <b>Заказ #{safe_id} отменен!</b>\n\n"
+                        f"👤 Пользователь <b>{safe_buyer}</b> или администратор отменил заказ.\n"
+                        f"📦 <b>Товар:</b> {safe_title}\n"
+                        f"💵 <b>Сумма:</b> {price:.2f} ₽"
+                    )
                 else:
                     msg_text = f"📦 <b>Обновление статуса заказа #{safe_id}:</b> {html.escape(status)}"
 
                 for admin_id in cfg.telegram_admin_ids:
                     try:
-                        await bot_inst.send_message(admin_id, msg_text, reply_markup=kb, parse_mode="HTML")
+                        await bot_inst.send_message(admin_id, msg_text, reply_markup=kb, parse_mode="HTML", disable_web_page_preview=True)
                         logger.info(f"[OrderRelay] Sent order notification for order #{order.id} ({status}) to admin {admin_id}")
                     except Exception as e:
                         logger.error(f"[OrderRelay] Error sending order notification to admin {admin_id}: {e}")
