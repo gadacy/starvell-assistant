@@ -1,4 +1,5 @@
 import html
+from urllib.parse import quote
 from datetime import datetime
 from typing import Optional, Dict
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
@@ -10,6 +11,7 @@ from starvell.client import StarvellClient
 from starvell.models import StarvellMessage, StarvellOrder
 from tg_bot.bot import get_bot
 from config import config
+from services.chat_state import has_purchase, record_order_purchase, record_chat_purchase, save_reply_target
 
 class ChatRelayService:
     """
@@ -44,6 +46,7 @@ class ChatRelayService:
             async with AsyncSessionLocal() as session:
                 for chat in chats:
                     if isinstance(chat, dict):
+                        await record_chat_purchase(chat)
                         chat_id = str(chat.get("id", ""))
                         if chat_id and chat_id not in self.seen_chats:
                             self.seen_chats[chat_id] = now
@@ -140,6 +143,8 @@ class ChatRelayService:
         now = datetime.utcnow()
 
         if order is not None:
+            await record_order_purchase(order)
+        if order is not None or await has_purchase(chat_id, message.sender_id):
             await self.update_chat_activity(chat_id, now)
         else:
             if await self.is_greeting_enabled():
@@ -193,8 +198,7 @@ class ChatRelayService:
         sender_name = message.sender_name or "Покупатель"
         safe_sender = html.escape(sender_name)
         safe_sender_id = html.escape(str(message.sender_id))
-        safe_msg_text = html.escape(message.text or "")
-        profile_url = f"https://starvell.com/profile/{sender_name}" if sender_name != "Покупатель" else "https://starvell.com"
+        profile_url = f"https://starvell.com/profile/{quote(sender_name, safe='')}" if sender_name != "Покупатель" else "https://starvell.com"
 
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [
@@ -216,24 +220,23 @@ class ChatRelayService:
         ])
 
         order_str = f" (Заказ #{html.escape(str(order.id))})" if order else ""
-        notification_text = (
-            f"💬 <b>Новое сообщение от {safe_sender}</b>{order_str}:\n"
-            f"{safe_msg_text}"
-        )
-
+        raw_text = message.text or ""
+        chunks = [raw_text[i:i + 1500] for i in range(0, len(raw_text), 1500)] or [""]
         for admin_id in config.telegram_admin_ids:
-            try:
-                await bot_instance.send_message(admin_id, notification_text, reply_markup=kb, parse_mode="HTML")
-                logger.info(f"[ChatRelay] Message from {sender_name} (chat {chat_id}) successfully forwarded to TG admin {admin_id}")
-            except Exception as e:
-                logger.error(f"[ChatRelay] Error sending HTML message to admin {admin_id}: {e}. Trying plain text fallback...")
+            for chunk in chunks:
+                notification_text = (
+                    f"💬 <b>Сообщение от {safe_sender}</b>{order_str}:\n"
+                    f"{html.escape(chunk)}\n\n"
+                    "↩️ Ответьте на это сообщение в Telegram или нажмите «Ответить»."
+                )
                 try:
-                    plain_text = (
-                        f"💬 Новое сообщение от {sender_name}:\n"
-                        f"{message.text}"
+                    sent = await bot_instance.send_message(
+                        admin_id, notification_text, reply_markup=kb, parse_mode="HTML"
                     )
-                    await bot_instance.send_message(admin_id, plain_text, reply_markup=kb)
-                    logger.info(f"[ChatRelay] Plain text message successfully forwarded to TG admin {admin_id}")
-                except Exception as ex:
-                    logger.error(f"[ChatRelay] Error forwarding plain message to admin {admin_id}: {ex}")
-
+                except Exception as e:
+                    logger.error(f"[ChatRelay] Error forwarding message to admin {admin_id}: {e}")
+                    continue
+                try:
+                    await save_reply_target(sent.chat.id, sent.message_id, chat_id)
+                except Exception as e:
+                    logger.error(f"[ChatRelay] Could not save Telegram reply target: {e}")

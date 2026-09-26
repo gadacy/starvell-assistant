@@ -5,7 +5,7 @@ import re
 import time
 from typing import List, Optional, Dict, Any, Set
 from core.logger import logger
-from starvell.models import StarvellUser, StarvellMessage, StarvellOrder, StarvellLot
+from starvell.models import StarvellUser, StarvellMessage, StarvellOrder, StarvellLot, StarvellReview
 
 class StarvellClient:
     """
@@ -21,6 +21,7 @@ class StarvellClient:
         self._logged_errors: Set[str] = set()
         self.public_id: Optional[str] = None
         self.user_id: Optional[str] = None
+        self.username: Optional[str] = None
         
         self.headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36",
@@ -32,8 +33,19 @@ class StarvellClient:
             "Origin": self.base_url
         }
 
-        if self.api_key:
-            self.headers["Cookie"] = self.api_key
+        cookie_val = self.api_key.strip().strip("'\"")
+        if cookie_val:
+            # If user provided a raw session token (e.g. UUID) without key=value
+            if "=" not in cookie_val:
+                cookie_val = f"session={cookie_val}"
+            self.headers["Cookie"] = cookie_val
+
+        try:
+            from config import config
+            if getattr(config, "starvell_user_id", ""):
+                self.user_id = str(config.starvell_user_id)
+        except Exception:
+            pass
 
         self._client: Optional[httpx.AsyncClient] = None
         self.is_simulation = not bool(self.api_key)
@@ -111,6 +123,8 @@ class StarvellClient:
                             self.public_id = str(u_info.get("publicId"))
                         if u_info.get("id"):
                             self.user_id = str(u_info.get("id"))
+                        if u_info.get("username"):
+                            self.username = str(u_info.get("username"))
                     logger.info(f"[StarvellClient] Next.js Build ID extracted: {self._build_id}")
                     return self._build_id
         except Exception as e:
@@ -141,7 +155,12 @@ class StarvellClient:
                         self.public_id = str(u_info.get("publicId"))
                     if u_info.get("id"):
                         self.user_id = str(u_info.get("id"))
+                    if u_info.get("username"):
+                        self.username = str(u_info.get("username"))
                 return data
+            elif res.status_code == 404:
+                # Next.js build ID might be stale after Starvell deployment
+                self._build_id = None
         except Exception as e:
             self._log_once(f"next_data_{path}", "warning", f"[StarvellClient] Ошибка Next.js Data API ({path}): {e}")
 
@@ -150,6 +169,7 @@ class StarvellClient:
     # --- User & Account Info ---
     async def get_profile(self) -> StarvellUser:
         if self.is_simulation:
+            self.username = "SimulatedSeller"
             return StarvellUser(
                 id="sim_101",
                 username="SimulatedSeller",
@@ -161,14 +181,22 @@ class StarvellClient:
                 reviews_count=12
             )
         
-        data = await self.get_next_data("index.json")
-        page_props = data.get("pageProps", {})
-        user_info = page_props.get("user")
+        # Try multiple endpoints for authenticated user data (index.json, chat.json, wallet.json)
+        user_info = None
+        for endpoint in ["index.json", "chat.json", "wallet.json"]:
+            data = await self.get_next_data(endpoint)
+            page_props = data.get("pageProps", {})
+            u = page_props.get("user")
+            if u and isinstance(u, dict) and u.get("id"):
+                user_info = u
+                break
 
         if user_info and isinstance(user_info, dict):
-            username = user_info.get("username") or user_info.get("name") or "Gradace"
-            user_id = str(user_info.get("id", "239792"))
+            raw_uid = user_info.get("id")
+            user_id = str(raw_uid) if raw_uid else (self.user_id or "")
+            username = user_info.get("username") or user_info.get("name") or (f"User_{user_id}" if user_id else "Пользователь")
             self.user_id = user_id
+            self.username = username
             self.public_id = user_info.get("publicId", self.public_id)
             is_online = bool(user_info.get("isOnline", True))
             avatar = user_info.get("avatar")
@@ -197,8 +225,20 @@ class StarvellClient:
                 is_selling_enabled=is_selling_enabled
             )
 
-        self.user_id = "239792"
-        return StarvellUser(id="239792", username="Gradace", public_id=self.public_id, is_online=True)
+        logger.warning("[StarvellClient] ⚠️ Не удалось получить профиль пользователя. Проверьте правильность STARVELL_API_KEY (куки session).")
+        self.username = "Не авторизован"
+        return StarvellUser(
+            id=self.user_id or "—",
+            username="Не авторизован",
+            public_id=self.public_id,
+            is_online=False,
+            balance_rub=0.0,
+            balance_hold=0.0,
+            rating=0.0,
+            reviews_count=0,
+            kyc_status="НЕ АВТОРИЗОВАН",
+            is_selling_enabled=False
+        )
 
     # --- Chats & Messages ---
     async def get_chats(self) -> List[Dict[str, Any]]:
@@ -233,16 +273,20 @@ class StarvellClient:
             except Exception:
                 continue
 
-        return True  # Fallback success for response routing
+        logger.error(f"[StarvellClient] Не удалось отправить сообщение в чат {chat_id}: все API endpoints отклонили запрос.")
+        return False
 
-    async def get_chat_messages(self, chat_id: str) -> List[StarvellMessage]:
+    async def get_chat_events(self, chat_id: str) -> List[Dict[str, Any]]:
+        """Keep notification metadata so the listener can detect purchases in chat history."""
         if self.is_simulation:
             return []
-            
         data = await self.get_next_data(f"chat/{chat_id}.json")
         page_props = data.get("pageProps", {})
         raw_messages = page_props.get("messages", page_props.get("initialMessages", []))
-        
+        return [item for item in raw_messages if isinstance(item, dict)] if isinstance(raw_messages, list) else []
+
+    async def get_chat_messages(self, chat_id: str) -> List[StarvellMessage]:
+        raw_messages = await self.get_chat_events(chat_id)
         messages = []
         if isinstance(raw_messages, list):
             for item in raw_messages:
@@ -312,6 +356,8 @@ class StarvellClient:
 
                 orders.append(StarvellOrder(
                     id=raw_id,
+                    short_id=order_short_id or (raw_id if len(raw_id) < 20 else None),
+                    full_id=order_full_id or (raw_id if len(raw_id) >= 20 else None),
                     buyer_id=str(it.get("userId", "")),
                     buyer_name="Покупатель",
                     lot_id=raw_id,
@@ -413,7 +459,7 @@ class StarvellClient:
                     # Buyer name extraction
                     buyer_obj = lm.get("buyer") if isinstance(lm.get("buyer"), dict) else {}
                     buyer_name = buyer_obj.get("username") or buyer_obj.get("displayName") or buyer_obj.get("name")
-                    buyer_id = str(buyer_obj.get("id") or ord_obj.get("buyerId") if ord_obj else "")
+                    buyer_id = str(buyer_obj.get("id") or (ord_obj.get("buyerId") if ord_obj else "") or "")
 
                     if not buyer_name:
                         parts = c.get("participants", [])
@@ -481,6 +527,8 @@ class StarvellClient:
 
                     order_item = StarvellOrder(
                         id=primary_id,
+                        short_id=order_short_id or (primary_id if len(primary_id) < 20 else None),
+                        full_id=order_id or (primary_id if len(primary_id) >= 20 else None),
                         buyer_id=buyer_id,
                         buyer_name=buyer_name,
                         lot_id=lot_id,
@@ -502,6 +550,8 @@ class StarvellClient:
             if s_id not in orders_map and w_info.get("full_id") not in orders_map:
                 orders_map[s_id] = StarvellOrder(
                     id=s_id,
+                    short_id=w_info.get("short_id") or (s_id if len(s_id) < 20 else None),
+                    full_id=w_info.get("full_id") or (w_id if len(w_id) >= 20 else None),
                     buyer_id="",
                     buyer_name="Покупатель",
                     lot_id=s_id,
@@ -526,6 +576,8 @@ class StarvellClient:
                             raw_p = float(item.get("totalPrice", item.get("price", 0.0)))
                             orders_map[o_id] = StarvellOrder(
                                 id=o_id,
+                                short_id=item.get("shortId"),
+                                full_id=item.get("id") or item.get("publicId"),
                                 buyer_id=str(item.get("buyerId", "")),
                                 buyer_name=item.get("buyerName", "Покупатель"),
                                 lot_id=str(item.get("offerId", o_id)),
@@ -543,6 +595,112 @@ class StarvellClient:
         if status:
             return [o for o in orders_list if o.status == status]
         return orders_list
+
+    # --- Reviews ---
+    async def get_reviews(self) -> List[StarvellReview]:
+        """
+        Fetches user reviews from profile Next.js Data API or Profile page.
+        """
+        if self.is_simulation:
+            from datetime import datetime
+            return [
+                StarvellReview(
+                    id="sim_rev_1",
+                    rating=5,
+                    content="Отличный продавец, всё выдал быстро!",
+                    order_id="01a04ef2-c0f3-5640-8cfa-5f0a190a4f13",
+                    order_short_id="F37WQ43K",
+                    lot_title="Roblox - Аккаунты",
+                    buyer_name="SimulatedBuyer",
+                    created_at=datetime.utcnow()
+                )
+            ]
+
+        if not self.username:
+            try:
+                await self.get_profile()
+            except Exception:
+                pass
+
+        username_slug = self.username.lower() if (self.username and self.username != "Не авторизован") else None
+        candidates = [
+            f"profile/{username_slug}.json" if username_slug else None,
+            f"profile/{self.username}.json" if (self.username and self.username != "Не авторизован") else None,
+            "profile.json",
+            "index.json"
+        ]
+
+        raw_reviews = []
+        for path in candidates:
+            if not path:
+                continue
+            data = await self.get_next_data(path)
+            props = data.get("pageProps", {})
+            revs = props.get("reviews") or props.get("userReviews") or props.get("initialReviews")
+            if isinstance(revs, list) and revs:
+                raw_reviews = revs
+                break
+
+        reviews: List[StarvellReview] = []
+        from datetime import datetime
+        for r in raw_reviews:
+            if not isinstance(r, dict):
+                continue
+            r_id = str(r.get("id") or "")
+            if not r_id:
+                continue
+
+            content = str(r.get("content") or "").strip()
+            rating_val = int(r.get("rating", 5) or 5)
+            ord_id = str(r.get("orderId") or "") or None
+            ord_short = str(r.get("orderShortId") or "") or None
+
+            # Extract lot / offer title
+            lot_title = ""
+            ord_data = r.get("order") if isinstance(r.get("order"), dict) else {}
+            off_details = ord_data.get("offerDetails") if isinstance(ord_data.get("offerDetails"), dict) else {}
+            game_name = off_details.get("game", {}).get("name", "") if isinstance(off_details.get("game"), dict) else ""
+            cat_name = off_details.get("category", {}).get("name", "") if isinstance(off_details.get("category"), dict) else ""
+            if game_name or cat_name:
+                lot_title = f"{game_name} - {cat_name}".strip(" -")
+            if not lot_title:
+                descs = off_details.get("descriptions", {}).get("rus", {}) if isinstance(off_details.get("descriptions"), dict) else {}
+                lot_title = descs.get("briefDescription") or descs.get("description") or ""
+            if not lot_title and ord_short:
+                lot_title = f"Заказ #{ord_short}"
+
+            # Extract author
+            author = r.get("author") if isinstance(r.get("author"), dict) else {}
+            buyer_name = author.get("username") or author.get("displayName") or "Покупатель"
+            buyer_avatar = author.get("avatar")
+            buyer_id = str(r.get("authorId") or author.get("publicId") or "")
+            is_anon = bool(r.get("isAnonymous", False))
+            if is_anon and buyer_name == "Покупатель":
+                buyer_name = "Анонимный покупатель"
+
+            dt_val = datetime.utcnow()
+            raw_dt = r.get("createdAt")
+            if raw_dt:
+                try:
+                    dt_val = datetime.fromisoformat(str(raw_dt).replace("Z", "+00:00")).replace(tzinfo=None)
+                except Exception:
+                    pass
+
+            reviews.append(StarvellReview(
+                id=r_id,
+                rating=rating_val,
+                content=content,
+                order_id=ord_id,
+                order_short_id=ord_short,
+                lot_title=lot_title,
+                buyer_id=buyer_id or None,
+                buyer_name=buyer_name,
+                buyer_avatar=buyer_avatar,
+                created_at=dt_val,
+                is_anonymous=is_anon
+            ))
+
+        return reviews
 
     # --- Lots & Auto Raise ---
     async def get_lots(self) -> List[StarvellLot]:

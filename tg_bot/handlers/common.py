@@ -1,6 +1,7 @@
+import asyncio
 from aiogram import Router, F
 from aiogram.filters import Command
-from aiogram.types import Message, CallbackQuery
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from sqlalchemy import select
@@ -17,16 +18,15 @@ class WatermarkState(StatesGroup):
     waiting_for_text = State()
 
 def is_admin(user_id: int) -> bool:
-    if not config.telegram_admin_ids:
-        return True  # If no admin set, allow first user
     return user_id in config.telegram_admin_ids
 
 @router.message(Command("start"))
-async def cmd_start(message: Message):
+async def cmd_start(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         await message.answer("❌ Доступ запрещен. Вы не являетесь администратором бота.")
         return
 
+    await state.clear()
     welcome_text = (
         f"👑 <b>Starvell Assistant Bot</b> (v{__version__})\n\n"
         "📢 <b>Канал проекта:</b> @starvell_assistant\n"
@@ -50,9 +50,10 @@ async def cmd_restart(message: Message):
     UpdateCheckerService.restart_bot()
 
 @router.callback_query(F.data == "menu_main")
-async def cb_main_menu(call: CallbackQuery):
+async def cb_main_menu(call: CallbackQuery, state: FSMContext):
     if not is_admin(call.from_user.id):
         return
+    await state.clear()
     await call.message.edit_text(
         f"👑 <b>Главное меню управления Starvell Assistant (v{__version__}):</b>",
         reply_markup=get_main_menu_kb(),
@@ -107,7 +108,14 @@ async def cb_toggle_setting(call: CallbackQuery):
             session.add(BotSetting(key=setting_key, value="false"))
         await session.commit()
 
-    await cb_settings(call)
+    if call.data == "toggle_auto_delivery":
+        from tg_bot.handlers.auto_delivery import cb_auto_delivery_menu
+        await cb_auto_delivery_menu(call)
+    elif call.data == "toggle_auto_raise":
+        from tg_bot.handlers.auto_raise import cb_auto_raise_menu
+        await cb_auto_raise_menu(call)
+    else:
+        await cb_settings(call)
 
 @router.callback_query(F.data == "toggle_watermark_enabled")
 async def cb_toggle_watermark(call: CallbackQuery):
@@ -230,7 +238,8 @@ async def handle_test_purchase(event: Message | CallbackQuery):
     from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
     import random
 
-    test_id = f"TEST{random.randint(1000, 9999)}"
+    test_id = f"F{random.randint(10, 99)}WQ43K"
+    test_uuid = "01a04ef2-c0f3-5640-8cfa-5f0a190a4f13"
     test_buyer = "StarvellBuyer_Demo"
     test_title = "Roblox Аккаунт 2012 Года [VIP / БЕЗ ПРИВЯЗОК]"
     test_price = 150.00
@@ -242,7 +251,10 @@ async def handle_test_purchase(event: Message | CallbackQuery):
             InlineKeyboardButton(text="📝 Заготовки", callback_data=f"quick_replies_{test_chat_id}")
         ],
         [
-            InlineKeyboardButton(text="🌐 Открыть чат / заказ", url="https://starvell.com"),
+            InlineKeyboardButton(text="🌐 Открыть заказ", url=f"https://starvell.com/order/{test_uuid}"),
+            InlineKeyboardButton(text="💬 Чат", url=f"https://starvell.com/chat/{test_chat_id}")
+        ],
+        [
             InlineKeyboardButton(text="💸 Возврат средств", callback_data=f"refund_order_{test_id}")
         ]
     ])
@@ -263,9 +275,50 @@ async def handle_test_purchase(event: Message | CallbackQuery):
     else:
         await event.answer(test_msg, reply_markup=kb, parse_mode="HTML", disable_web_page_preview=True)
 
+# --- Test Review Notification ---
+@router.message(Command("test_review"))
+@router.callback_query(F.data == "test_review_notification")
+async def handle_test_review(event: Message | CallbackQuery):
+    user_id = event.from_user.id
+    if not is_admin(user_id):
+        return
+
+    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+    import random
+
+    test_short_id = f"F{random.randint(10, 99)}WQ43K"
+    test_uuid = "01a04ef2-c0f3-5640-8cfa-5f0a190a4f13"
+    test_buyer = "HappyCustomer"
+    test_title = "Roblox - Аккаунты (2012 год с войсом)"
+    test_comment = "Всё отлично, моментальный ответ, товар полностью рабочий! Рекомендую продавца 👍"
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="🌐 Открыть заказ", url=f"https://starvell.com/order/{test_uuid}"),
+            InlineKeyboardButton(text="💬 Чат", url="https://starvell.com/chat")
+        ],
+        [
+            InlineKeyboardButton(text="👤 Профиль покупателя", url=f"https://starvell.com/profile/{test_buyer}")
+        ]
+    ])
+
+    test_msg = (
+        "🧪 <b>[ТЕСТОВОЕ ОПОВЕЩЕНИЕ]</b>\n\n"
+        "⭐ <b>Новый отзыв на Starvell!</b>\n\n"
+        "⭐️ <b>Оценка:</b> ⭐⭐⭐⭐⭐ (5/5)\n"
+        f"💬 <b>Отзыв:</b> «<i>{test_comment}</i>»\n"
+        f"📦 <b>Товар:</b> {test_title}\n"
+        f"👤 <b>Покупатель:</b> <a href='https://starvell.com/profile/{test_buyer}'>{test_buyer}</a>\n"
+        f"🆔 <b>Заказ:</b> <code>#{test_short_id}</code>"
+    )
+
+    if isinstance(event, CallbackQuery):
+        await event.answer("✅ Тестовый отзыв отправлен!", show_alert=False)
+        await event.message.answer(test_msg, reply_markup=kb, parse_mode="HTML", disable_web_page_preview=True)
+    else:
+        await event.answer(test_msg, reply_markup=kb, parse_mode="HTML", disable_web_page_preview=True)
+
 # --- Update Checker & Self-Restart Handlers ---
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-import asyncio
 
 @router.callback_query(F.data == "menu_check_updates")
 async def cb_check_updates(call: CallbackQuery):

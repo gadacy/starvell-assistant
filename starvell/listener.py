@@ -2,17 +2,18 @@ import asyncio
 from typing import Callable, List, Set, Dict, Any, Awaitable, Optional
 from sqlalchemy import select
 from core.database.base import AsyncSessionLocal
-from core.database.models import OrderHistory
+from core.database.models import OrderHistory, ReviewHistory
 from core.logger import logger
 from starvell.client import StarvellClient
-from starvell.models import StarvellEvent, StarvellMessage, StarvellOrder
+from starvell.models import StarvellEvent, StarvellMessage, StarvellOrder, StarvellReview
+from services.chat_state import record_order_purchase, record_chat_purchase
 
 EventHandler = Callable[[StarvellEvent], Awaitable[None]]
 
 class StarvellListener:
     """
     Background event listener for Starvell.
-    Monitors new chat messages, notification events, and new orders / status updates.
+    Monitors new chat messages, notification events, new orders, and new reviews.
     """
     def __init__(self, client: StarvellClient, poll_interval: float = 3.0):
         self.client = client
@@ -23,9 +24,12 @@ class StarvellListener:
         
         # Deduplication sets
         self._seen_messages: Set[str] = set()
+        self._chat_last_messages: Dict[str, str] = {}
         self._seen_orders: Dict[str, str] = {}  # order_id -> last_known_status
+        self._seen_reviews: Set[str] = set()
         self._messages_initialized = False
         self._orders_initialized = False
+        self._reviews_initialized = False
 
     def register_handler(self, handler: EventHandler):
         self.handlers.append(handler)
@@ -38,7 +42,7 @@ class StarvellListener:
                 logger.error(f"[StarvellListener] Exception in event handler: {e}")
 
     async def init_seen_state(self):
-        """Pre-seed seen orders from database to prevent re-alerting on bot startup."""
+        """Pre-seed seen orders and reviews from database to prevent re-alerting on bot startup."""
         try:
             async with AsyncSessionLocal() as session:
                 res = await session.execute(select(OrderHistory))
@@ -46,10 +50,19 @@ class StarvellListener:
                 for o in orders_db:
                     if o.order_id:
                         self._seen_orders[str(o.order_id)] = str(o.status or "completed").lower()
+
+                res_rev = await session.execute(select(ReviewHistory))
+                revs_db = res_rev.scalars().all()
+                for r in revs_db:
+                    if r.review_id:
+                        self._seen_reviews.add(str(r.review_id))
+
             if self._seen_orders:
                 logger.info(f"[StarvellListener] Pre-seeded {len(self._seen_orders)} known orders from database.")
+            if self._seen_reviews:
+                logger.info(f"[StarvellListener] Pre-seeded {len(self._seen_reviews)} known reviews from database.")
         except Exception as e:
-            logger.warning(f"[StarvellListener] Error pre-seeding orders from DB: {e}")
+            logger.warning(f"[StarvellListener] Error pre-seeding state from DB: {e}")
 
     async def start(self):
         if self._is_running:
@@ -75,10 +88,80 @@ class StarvellListener:
                 if not self.client.is_simulation:
                     await self._check_orders()
                     await self._check_messages()
+                    await self._check_reviews()
             except Exception as e:
                 logger.error(f"[StarvellListener] Error in listen loop: {e}")
 
             await asyncio.sleep(self.poll_interval)
+
+    async def _check_reviews(self):
+        try:
+            reviews = await self.client.get_reviews()
+            if not isinstance(reviews, list):
+                return
+
+            for rev in reviews:
+                if not rev.id:
+                    continue
+
+                if rev.id not in self._seen_reviews:
+                    self._seen_reviews.add(rev.id)
+
+                    # Initial run: seed to DB without firing notifications
+                    if not self._reviews_initialized:
+                        try:
+                            async with AsyncSessionLocal() as session:
+                                chk = await session.execute(
+                                    select(ReviewHistory).where(ReviewHistory.review_id == str(rev.id))
+                                )
+                                if not chk.scalar_one_or_none():
+                                    session.add(ReviewHistory(
+                                        review_id=rev.id,
+                                        order_id=rev.order_id,
+                                        order_short_id=rev.order_short_id,
+                                        rating=rev.rating,
+                                        content=rev.content,
+                                        author_name=rev.buyer_name,
+                                        lot_title=rev.lot_title,
+                                        created_at=rev.created_at
+                                    ))
+                                    await session.commit()
+                        except Exception as e:
+                            logger.warning(f"[StarvellListener] Error saving initial review {rev.id}: {e}")
+                        continue
+
+                    # Save new review to DB
+                    try:
+                        async with AsyncSessionLocal() as session:
+                            chk = await session.execute(
+                                select(ReviewHistory).where(ReviewHistory.review_id == str(rev.id))
+                            )
+                            if not chk.scalar_one_or_none():
+                                session.add(ReviewHistory(
+                                    review_id=rev.id,
+                                    order_id=rev.order_id,
+                                    order_short_id=rev.order_short_id,
+                                    rating=rev.rating,
+                                    content=rev.content,
+                                    author_name=rev.buyer_name,
+                                    lot_title=rev.lot_title,
+                                    created_at=rev.created_at
+                                ))
+                                await session.commit()
+                    except Exception as e:
+                        logger.warning(f"[StarvellListener] Error saving review {rev.id} to DB: {e}")
+
+                    event = StarvellEvent(
+                        event_type="new_review",
+                        chat_id=rev.chat_id,
+                        review=rev
+                    )
+                    logger.info(f"[StarvellListener] New review detected: {rev.rating}⭐ by {rev.buyer_name} for order {rev.order_short_id or rev.order_id}")
+                    await self._emit(event)
+
+            self._reviews_initialized = True
+        except Exception as e:
+            logger.error(f"[StarvellListener] Error checking reviews: {e}")
 
     async def _check_orders(self):
         try:
@@ -87,6 +170,7 @@ class StarvellListener:
                 return
 
             for order in orders:
+                await record_order_purchase(order)
                 last_status = self._seen_orders.get(order.id)
                 status_str = str(order.status).lower() if order.status else "unknown"
 
@@ -162,7 +246,43 @@ class StarvellListener:
             my_public_id = str(self.client.public_id or "")
             my_user_id = str(getattr(self.client, 'user_id', '') or '')
 
+            # The chat list contains only the last message. Read changed chats so a
+            # purchase followed by a buyer's message cannot disappear between polls.
+            expanded_chats = []
             for chat in chats:
+                if not isinstance(chat, dict):
+                    continue
+                await record_chat_purchase(chat)
+                last = chat.get("lastMessage")
+                if not isinstance(last, dict) or str(last.get("id") or "") in self._seen_messages:
+                    continue
+                history = []
+                try:
+                    history = await self.client.get_chat_events(str(chat.get("id") or ""))
+                except Exception as exc:
+                    logger.warning(f"[StarvellListener] Could not load chat history: {exc}")
+                if not isinstance(history, list):
+                    history = []
+                history = [item for item in history if isinstance(item, dict)]
+                if not any(str(item.get("id")) == str(last.get("id")) for item in history):
+                    history.append(last)
+                history.sort(key=lambda item: str(item.get("createdAt") or ""))
+                chat_key = str(chat.get("id") or "")
+                previous_id = self._chat_last_messages.get(chat_key)
+                # Persist purchase context from the whole returned history, but forward
+                # only messages after the previous cursor when it is still available.
+                for item in history:
+                    await record_chat_purchase(dict(chat, lastMessage=item))
+                if previous_id:
+                    previous_index = next((i for i, item in enumerate(history) if str(item.get("id")) == previous_id), None)
+                    if previous_index is not None:
+                        history = history[previous_index + 1:]
+                self._chat_last_messages[chat_key] = str(last.get("id") or "")
+                for item in history:
+                    entry = dict(chat, lastMessage=item)
+                    expanded_chats.append(entry)
+
+            for chat in expanded_chats:
                 if not isinstance(chat, dict):
                     continue
                 chat_id = str(chat.get("id", ""))
@@ -213,8 +333,10 @@ class StarvellListener:
 
                 # 1. Handle NOTIFICATION type (order updates, reviews, purchases)
                 if msg_type == "NOTIFICATION" or ntype:
-                    ord_obj = last_msg.get("order") if isinstance(last_msg.get("order"), dict) else None
-                    order_id = str(ord_obj.get("shortId") or ord_obj.get("id") or meta.get("orderShortId") or meta.get("orderId") or "")
+                    ord_obj = last_msg.get("order") if isinstance(last_msg.get("order"), dict) else {}
+                    order_full_id = str(ord_obj.get("id") or meta.get("orderId") or "")
+                    order_short_id = str(ord_obj.get("shortId") or meta.get("orderShortId") or "")
+                    order_id = order_short_id or order_full_id
                     
                     if ntype in ["ORDER_CREATED", "ORDER_PAID", "ORDER_NEW", "ORDER_PAYMENT"]:
                         status_str = "paid"
@@ -224,16 +346,25 @@ class StarvellListener:
                         status_str = "refunded"
                     elif ntype == "REVIEW_CREATED":
                         status_str = "review"
+                        # Trigger review check immediately
+                        await self._check_reviews()
+                        continue
                     else:
-                        status_str = "paid"
+                        # Other site notifications must not trigger auto-delivery.
+                        continue
 
                     if order_id and status_str != "review":
                         last_st = self._seen_orders.get(order_id)
+                        if status_str == "paid" and last_st in {"completed", "refunded", "cancelled", "canceled"}:
+                            continue
                         if last_st != status_str:
                             self._seen_orders[order_id] = status_str
 
                             # Lot title & qty
-                            qty = int(ord_obj.get("quantity", 1)) if ord_obj else 1
+                            try:
+                                qty = max(1, int(ord_obj.get("quantity") or 1))
+                            except (TypeError, ValueError):
+                                qty = 1
                             lot_title = f"Заказ #{order_id}"
                             lot_id = order_id
                             if ord_obj:
@@ -244,6 +375,8 @@ class StarvellListener:
 
                             order_model = StarvellOrder(
                                 id=order_id,
+                                short_id=order_short_id or (order_id if len(order_id) < 20 else None),
+                                full_id=order_full_id or (order_id if len(order_id) >= 20 else None),
                                 buyer_id=str(buyer_obj.get("id") or ""),
                                 buyer_name=sender_name,
                                 lot_id=lot_id,
@@ -263,12 +396,16 @@ class StarvellListener:
                             await self._emit(event)
                             continue
 
+                    # System notifications must never become buyer text messages.
+                    continue
+
                 # 2. Handle standard chat text message
                 text_content = last_msg.get("content") or last_msg.get("text") or ""
                 if not text_content:
                     continue
 
-                author_id = str(last_msg.get("authorId", last_msg.get("sender_id", "")))
+                author = last_msg.get("author") if isinstance(last_msg.get("author"), dict) else {}
+                author_id = str(last_msg.get("authorId") or last_msg.get("senderId") or last_msg.get("sender_id") or author.get("id") or author.get("publicId") or "")
                 msg_obj = StarvellMessage(
                     id=msg_id,
                     chat_id=chat_id,
@@ -288,4 +425,3 @@ class StarvellListener:
             self._messages_initialized = True
         except Exception as e:
             logger.error(f"[StarvellListener] Error checking messages: {e}")
-

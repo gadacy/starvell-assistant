@@ -16,10 +16,6 @@ def get_auto_delivery_kb(is_enabled: bool) -> InlineKeyboardMarkup:
             )
         ],
         [
-            InlineKeyboardButton(text="📦 Склад товаров", callback_data="menu_stock"),
-            InlineKeyboardButton(text="➕ Добавить ключи", callback_data="stock_add")
-        ],
-        [
             InlineKeyboardButton(text="◀️ Главное меню", callback_data="menu_main")
         ]
     ])
@@ -45,6 +41,7 @@ async def cb_auto_delivery_menu(call: CallbackQuery):
         "⚡ **Панель управления Авто-выдачей товаров:**\n\n"
         "Бот автоматически выдает цифровые товары (ключи, аккаунты, промокоды) "
         "покупателю сразу после оплаты заказа на Starvell.com.\n\n"
+        "Пополнить склад можно в разделе «Запас товаров» главного меню.\n\n"
         f"📊 **Статус модуля:** {'🟢 Включен' if is_enabled else '🔴 Выключен'}\n"
         f"📦 **Доступно товаров на складе:** `{total_stock}` шт.\n"
         f"🎉 **Успешно выдано заказов:** `{total_delivered}` шт."

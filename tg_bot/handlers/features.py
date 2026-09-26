@@ -22,9 +22,6 @@ def set_client(client: StarvellClient):
 def get_client() -> Optional[StarvellClient]:
     return starvell_client_ref
 
-class ReplyState(StatesGroup):
-    waiting_for_text = State()
-
 class BroadcastState(StatesGroup):
     waiting_for_text = State()
 
@@ -66,19 +63,14 @@ def format_cooldown_label(hours: float) -> str:
 def get_features_kb(greeting: bool, reminder: bool) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="👤 Профиль Starvell", callback_data="feature_profile"),
-            InlineKeyboardButton(text="💬 Активные чаты", callback_data="feature_chats")
-        ],
-        [
-            InlineKeyboardButton(text="⚡ Быстрые ответы", callback_data="menu_quick_replies"),
+            InlineKeyboardButton(text="💬 Активные чаты", callback_data="feature_chats"),
             InlineKeyboardButton(text="📣 Рассылка покупателям", callback_data="feature_broadcast")
         ],
         [
             InlineKeyboardButton(
-                text=f"Приветствие: {'🟢 ВКЛ' if greeting else '🔴 ВЫКЛ'}",
-                callback_data="toggle_feature_greeting"
-            ),
-            InlineKeyboardButton(text="⚙️ Настройки приветствия", callback_data="menu_greeting_settings")
+                text=f"⚙️ Приветствие: {'🟢 ВКЛ' if greeting else '🔴 ВЫКЛ'}",
+                callback_data="menu_greeting_settings"
+            )
         ],
         [
             InlineKeyboardButton(
@@ -122,16 +114,29 @@ async def handle_profile(event: Message | CallbackQuery):
 
     profile = await client.get_profile()
     
-    text = (
-        "👤 **Статистика и Профиль Starvell:**\n\n"
-        f"🆔 **ID:** `{profile.id}`\n"
-        f"👑 **Никнейм:** **{profile.username}**\n"
-        f"🟢 **Статус:** {'Онлайн' if profile.is_online else 'Офлайн'}\n"
-        f"⭐️ **Рейтинг:** {profile.rating:.1f} ({profile.reviews_count} отзывов)\n"
-        f"💵 **Доступно к выводу:** **{profile.balance_rub:,.2f} RUB**\n"
-        f"🔒 **Средства в холде:** {profile.balance_hold:,.2f} RUB\n"
-        f"📦 **Статус торговли:** {'🟢 Активна' if profile.is_selling_enabled else '🔴 Приостановлена'} ({profile.kyc_status})"
-    )
+    if profile.username == "Не авторизован" or profile.kyc_status == "НЕ АВТОРИЗОВАН":
+        text = (
+            "👤 **Статистика и Профиль Starvell:**\n\n"
+            "🔴 **Статус:** `НЕ АВТОРИЗОВАН`\n\n"
+            "⚠️ Бот не смог получить данные вашего аккаунта по указанному ключу/куки.\n"
+            "Сессионная кука (`STARVELL_API_KEY`) недействительна или устарела.\n\n"
+            "📌 **Как исправить:**\n"
+            "1. Зайдите на сайт Starvell.com и авторизуйтесь в свой аккаунт.\n"
+            "2. В браузере (F12) ➔ Хранилище/Приложение ➔ Cookies найдите `session`.\n"
+            "3. Скопируйте значение `session` (или всю строку кук) и укажите в `.env` (`STARVELL_API_KEY=...`).\n"
+            "4. Перезапустите бота командой /restart."
+        )
+    else:
+        text = (
+            "👤 **Статистика и Профиль Starvell:**\n\n"
+            f"🆔 **ID:** `{profile.id}`\n"
+            f"👑 **Никнейм:** **{profile.username}**\n"
+            f"🟢 **Статус:** {'Онлайн' if profile.is_online else 'Офлайн'}\n"
+            f"⭐️ **Рейтинг:** {profile.rating:.1f} ({profile.reviews_count} отзывов)\n"
+            f"💵 **Доступно к выводу:** **{profile.balance_rub:,.2f} RUB**\n"
+            f"🔒 **Средства в холде:** {profile.balance_hold:,.2f} RUB\n"
+            f"📦 **Статус торговли:** {'🟢 Активна' if profile.is_selling_enabled else '🔴 Приостановлена'} ({profile.kyc_status})"
+        )
     
     if isinstance(event, CallbackQuery):
         await event.message.edit_text(text, reply_markup=get_back_kb(), parse_mode="Markdown")
@@ -219,49 +224,8 @@ async def cmd_reply(message: Message, command: CommandObject):
         return
 
     chat_id, text_to_send = parts[0], parts[1]
-    client = get_client()
-    if client:
-        ok = await client.send_message(chat_id, text_to_send)
-        if ok:
-            await message.answer(f"✅ **Сообщение успешно отправлено покупателю!** (`{chat_id}`)", parse_mode="Markdown")
-        else:
-            await message.answer(f"❌ Не удалось отправить сообщение в чат {chat_id}.")
-    else:
-        await message.answer("⚠️ Клиент Starvell еще не инициализирован.")
-
-# --- 4. Inline Reply Button ---
-@router.callback_query(F.data.startswith("reply_chat_"))
-async def cb_reply_button(call: CallbackQuery, state: FSMContext):
-    chat_id = call.data.replace("reply_chat_", "")
-    await state.update_data(reply_chat_id=chat_id)
-    await state.set_state(ReplyState.waiting_for_text)
-    await call.message.answer(
-        f"✍️ **Введите ответ для покупателя** (Чат `{chat_id}`):\n\n"
-        f"Просто отправьте текст следующим сообщением в этот чат Telegram.",
-        parse_mode="Markdown"
-    )
-
-@router.message(ReplyState.waiting_for_text)
-async def process_reply_text(message: Message, state: FSMContext):
-    data = await state.get_data()
-    chat_id = data.get("reply_chat_id")
-    text_to_send = message.text.strip()
-
-    if not text_to_send:
-        await message.answer("⚠️ Пустой текст. Попробуйте еще раз.")
-        return
-
-    client = get_client()
-    if client:
-        ok = await client.send_message(chat_id, text_to_send)
-        if ok:
-            await message.answer(f"✅ **Сообщение успешно отправлено в Starvell!** (`{chat_id}`)", parse_mode="Markdown")
-        else:
-            await message.answer("❌ Ошибка отправки сообщения в Starvell.")
-    else:
-        await message.answer("⚠️ Клиент Starvell еще не инициализирован.")
-
-    await state.clear()
+    from tg_bot.handlers.chat import send_chat_reply
+    await send_chat_reply(message, chat_id, text_to_send)
 
 # --- 5. Toggles ---
 @router.callback_query(F.data.startswith("toggle_feature_"))
@@ -543,7 +507,7 @@ async def cb_quick_replies_for_chat(call: CallbackQuery):
     if not qrs:
         await call.message.answer(
             "⚠️ У вас пока нет созданных быстрых ответов!\n"
-            "Создать их можно в меню: **Фишки & Чат -> ⚡ Быстрые ответы**.",
+            "Создать их можно в меню: **Главное меню -> ⚡ Быстрые ответы**.",
             reply_markup=get_back_kb(),
             parse_mode="Markdown"
         )
@@ -623,7 +587,7 @@ async def handle_quick_replies_menu(event: Message | CallbackQuery):
             InlineKeyboardButton(text="🗑 Удалить ответ", callback_data="qr_delete_menu")
         ],
         [
-            InlineKeyboardButton(text="◀️ Назад в меню", callback_data="menu_features")
+            InlineKeyboardButton(text="◀️ Главное меню", callback_data="menu_main")
         ]
     ]
 

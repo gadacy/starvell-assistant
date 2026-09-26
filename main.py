@@ -1,7 +1,8 @@
 import importlib
 import asyncio
 import sys
-from sqlalchemy import select
+from urllib.parse import quote
+from sqlalchemy import select, func
 import config
 from core.database.base import init_db, AsyncSessionLocal
 from core.database.models import BotSetting
@@ -13,6 +14,7 @@ from services.auto_responder import AutoResponderService
 from services.auto_delivery import AutoDeliveryService
 from services.auto_raise import AutoRaiseService
 from services.chat_relay import ChatRelayService
+from services.chat_state import record_order_purchase, save_reply_target
 from services.review_reminder import ReviewReminderService
 from services.plugin_manager import PluginManager
 from tg_bot.bot import init_telegram_bot, send_admin_notification, send_admin_startup_panel, get_bot
@@ -81,6 +83,8 @@ async def run_bot_instance() -> bool:
         if not order:
             return
 
+        await record_order_purchase(order)
+
         order_chat_id = str(order.chat_id or order.buyer_id or "")
         if order_chat_id:
             await chat_relay.mark_chat_seen(order_chat_id)
@@ -116,8 +120,17 @@ async def run_bot_instance() -> bool:
                         InlineKeyboardButton(text="✉️ Ответить", callback_data=f"reply_chat_{chat_id}"),
                         InlineKeyboardButton(text="📝 Заготовки", callback_data=f"quick_replies_{chat_id}")
                     ])
+
+                link_buttons = []
+                if order.full_id:
+                    link_buttons.append(InlineKeyboardButton(text="🌐 Открыть заказ", url=f"https://starvell.com/order/{order.full_id}"))
+                if chat_id:
+                    link_buttons.append(InlineKeyboardButton(text="💬 Чат", url=f"https://starvell.com/chat/{chat_id}"))
+                if not link_buttons:
+                    link_buttons.append(InlineKeyboardButton(text="🌐 Открыть чат / заказ", url=order_url))
+
+                buttons.append(link_buttons)
                 buttons.append([
-                    InlineKeyboardButton(text="🌐 Открыть чат / заказ", url=order_url),
                     InlineKeyboardButton(text="💸 Возврат средств", callback_data=f"refund_order_{safe_id}")
                 ])
 
@@ -131,9 +144,11 @@ async def run_bot_instance() -> bool:
                         ad_enabled = set_ad.value.lower() == "true" if set_ad else True
 
                         stock_res = await db_session.execute(
-                            select(StockItem).where(StockItem.lot_id == str(order.lot_id), StockItem.is_used == False).limit(1)
+                            select(func.count(StockItem.id)).where(
+                                StockItem.lot_id == str(order.lot_id), StockItem.is_used == False
+                            )
                         )
-                        has_stock = stock_res.scalar_one_or_none() is not None
+                        has_stock = stock_res.scalar_one() >= max(1, int(order.amount or 1))
 
                         template_res = await db_session.execute(
                             select(AutoResponse).where(
@@ -144,7 +159,9 @@ async def run_bot_instance() -> bool:
                         )
                         has_template = template_res.scalar_one_or_none() is not None
 
-                    if not ad_enabled:
+                    if status == "new":
+                        delivery_info = "⏳ <b>Авто-выдача:</b> <i>Ожидает подтверждения оплаты.</i>"
+                    elif not ad_enabled:
                         delivery_info = "ℹ️ <b>Авто-выдача:</b> <i>Отключена в настройках бота.</i>"
                     elif has_stock or has_template:
                         delivery_info = "⚡ <b>Авто-выдача:</b> <i>Товар выдается автоматически!</i>"
@@ -152,7 +169,8 @@ async def run_bot_instance() -> bool:
                         delivery_info = "⚠️ <b>Авто-выдача:</b> <i>Нет привязанного ключа/шаблона. Требуется ручная выдача!</i>"
 
                     qty_str = f"🔢 <b>Количество:</b> {order.amount} шт.\n" if order.amount and order.amount > 1 else ""
-                    buyer_str = f"<a href='https://starvell.com/profile/{safe_buyer}'>{safe_buyer}</a>" if safe_buyer != "Покупатель" else safe_buyer
+                    buyer_url = f"https://starvell.com/profile/{quote(str(order.buyer_name), safe='')}"
+                    buyer_str = f"<a href='{buyer_url}'>{safe_buyer}</a>" if safe_buyer != "Покупатель" else safe_buyer
 
                     msg_text = (
                         f"🛍 <b>Новая покупка на Starvell!</b>\n\n"
@@ -182,7 +200,9 @@ async def run_bot_instance() -> bool:
 
                 for admin_id in cfg.telegram_admin_ids:
                     try:
-                        await bot_inst.send_message(admin_id, msg_text, reply_markup=kb, parse_mode="HTML", disable_web_page_preview=True)
+                        sent = await bot_inst.send_message(admin_id, msg_text, reply_markup=kb, parse_mode="HTML", disable_web_page_preview=True)
+                        if chat_id:
+                            await save_reply_target(sent.chat.id, sent.message_id, str(chat_id))
                         logger.info(f"[OrderRelay] Sent order notification for order #{order.id} ({status}) to admin {admin_id}")
                     except Exception as e:
                         logger.error(f"[OrderRelay] Error sending order notification to admin {admin_id}: {e}")
@@ -190,6 +210,73 @@ async def run_bot_instance() -> bool:
         # 2. Trigger Auto-delivery for paid / new orders
         if status in ["paid", "new"]:
             await auto_delivery.process_order(order)
+
+    async def process_review_event(event: StarvellEvent):
+        review = event.review
+        if not review:
+            return
+
+        # Check if notify_reviews is enabled
+        async with AsyncSessionLocal() as session:
+            res = await session.execute(
+                select(BotSetting).where(BotSetting.key == "notify_reviews")
+            )
+            setting = res.scalar_one_or_none()
+            notify_enabled = setting.value.lower() == "true" if setting else True
+
+        if not notify_enabled:
+            return
+
+        bot_inst = get_bot()
+        if not bot_inst or not cfg.telegram_admin_ids:
+            return
+
+        import html
+        from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+
+        safe_buyer = html.escape(str(review.buyer_name or "Покупатель"))
+        safe_title = html.escape(str(review.lot_title or "Товар Starvell"))
+        safe_content = html.escape(str(review.content or "").strip())
+        ord_short = html.escape(str(review.order_short_id or review.order_id or ""))
+
+        stars_str = review.stars_display
+        rating_num = int(review.rating or 5)
+
+        buyer_url = f"https://starvell.com/profile/{quote(str(review.buyer_name), safe='')}"
+        buyer_link = f"<a href='{buyer_url}'>{safe_buyer}</a>" if (safe_buyer and not review.is_anonymous and safe_buyer != "Покупатель") else safe_buyer
+
+        comment_block = f"💬 <b>Отзыв:</b> «<i>{safe_content}</i>»\n" if safe_content else "💬 <b>Отзыв:</b> <i>(Без текстового комментария)</i>\n"
+        order_block = f"🆔 <b>Заказ:</b> <code>#{ord_short}</code>\n" if ord_short else ""
+
+        msg_text = (
+            f"⭐ <b>Новый отзыв на Starvell!</b>\n\n"
+            f"⭐️ <b>Оценка:</b> {stars_str} ({rating_num}/5)\n"
+            f"{comment_block}"
+            f"📦 <b>Товар:</b> {safe_title}\n"
+            f"👤 <b>Покупатель:</b> {buyer_link}\n"
+            f"{order_block}"
+        )
+
+        buttons = []
+        link_row = []
+        if review.order_id:
+            link_row.append(InlineKeyboardButton(text="🌐 Открыть заказ", url=f"https://starvell.com/order/{review.order_id}"))
+        if review.chat_id:
+            link_row.append(InlineKeyboardButton(text="💬 Чат", url=f"https://starvell.com/chat/{review.chat_id}"))
+        elif not review.is_anonymous and review.buyer_name and review.buyer_name != "Покупатель":
+            link_row.append(InlineKeyboardButton(text="👤 Профиль", url=buyer_url))
+
+        if link_row:
+            buttons.append(link_row)
+
+        kb = InlineKeyboardMarkup(inline_keyboard=buttons) if buttons else None
+
+        for admin_id in cfg.telegram_admin_ids:
+            try:
+                await bot_inst.send_message(admin_id, msg_text, reply_markup=kb, parse_mode="HTML", disable_web_page_preview=True)
+                logger.info(f"[ReviewRelay] Sent review notification ({review.rating}⭐) to admin {admin_id}")
+            except Exception as e:
+                logger.error(f"[ReviewRelay] Error sending review notification to admin {admin_id}: {e}")
 
     async def on_starvell_event(event: StarvellEvent):
         logger.info(f"[EventDispatcher] Received event: {event.event_type}")
@@ -200,6 +287,8 @@ async def run_bot_instance() -> bool:
             await chat_relay.update_chat_activity(event.chat_id)
         elif event.event_type.startswith("order_") and event.order:
             await process_order_event(event)
+        elif event.event_type == "new_review" and event.review:
+            await process_review_event(event)
 
         # Dispatch event to active plugins
         await plugin_manager.dispatch_event(event)
@@ -207,19 +296,12 @@ async def run_bot_instance() -> bool:
     listener = StarvellListener(client=starvell_client, poll_interval=3.0)
     listener.register_handler(on_starvell_event)
 
-    # Start background loops
-    await listener.start()
-    await auto_raise.start()
-    await review_reminder.start()
-
     async def check_updates_background():
         await asyncio.sleep(5.0)
         has_update, msg_text, _ = await UpdateCheckerService.check_for_updates()
         if has_update:
             logger.info(f"[Main] {msg_text}")
             await send_admin_notification(msg_text)
-
-    asyncio.create_task(check_updates_background())
 
     # 5. Initialize Telegram Bot
     bot, dp = init_telegram_bot()
@@ -229,27 +311,50 @@ async def run_bot_instance() -> bool:
 
     await send_admin_startup_panel()
 
+    # Start event producers only after Telegram is ready to receive their notifications.
+    await listener.start()
+    await auto_raise.start()
+    await review_reminder.start()
+    update_task = asyncio.create_task(check_updates_background())
+
     restart_requested = False
     try:
         wait_task = asyncio.create_task(restart_event.wait())
-        done, pending = await asyncio.wait([wait_task], return_when=asyncio.FIRST_COMPLETED)
+        watched_tasks = [wait_task]
+        if bot_task:
+            watched_tasks.append(bot_task)
+        done, pending = await asyncio.wait(watched_tasks, return_when=asyncio.FIRST_COMPLETED)
         if wait_task in done and restart_event.is_set():
             logger.info("[Main] Получен сигнал мягкого перезапуска бота!")
             restart_requested = True
+        elif bot_task in done:
+            if bot_task.cancelled():
+                logger.warning("[Main] Telegram polling was cancelled.")
+            elif bot_task.exception():
+                logger.error(f"[Main] Telegram polling stopped with error: {bot_task.exception()}")
+            else:
+                logger.warning("[Main] Telegram polling stopped unexpectedly.")
     except (KeyboardInterrupt, asyncio.CancelledError):
         logger.info("[Main] Завершение работы служб бота...")
     finally:
         logger.info("[Main] Остановка служб и завершение подключений...")
+        if not wait_task.done():
+            wait_task.cancel()
+        if not update_task.done():
+            update_task.cancel()
+        await asyncio.gather(wait_task, update_task, return_exceptions=True)
         await listener.stop()
         await auto_raise.stop()
         await review_reminder.stop()
+        await plugin_manager.unload_all_plugins()
         await starvell_client.close()
-        if bot and dp:
+        if bot and dp and bot_task and not bot_task.done():
             await dp.stop_polling()
-            if bot.session:
-                await bot.session.close()
         if bot_task and not bot_task.done():
             bot_task.cancel()
+            await asyncio.gather(bot_task, return_exceptions=True)
+        if bot:
+            await bot.session.close()
         logger.info("[Main] Инстанс бота успешно остановлен.")
 
     return restart_requested
@@ -264,7 +369,10 @@ async def main():
         logger.info("--------------------------------------------------")
         logger.info("🔄 [Main] Мягкий перезапуск всех служб в текущем окне...")
         logger.info("--------------------------------------------------")
-        importlib.reload(config)
+        # Keep the shared Config instance: handlers and middleware imported it directly.
+        refreshed_config = config.load_config()
+        for field, value in refreshed_config.model_dump().items():
+            setattr(config.config, field, value)
         importlib.reload(version)
         importlib.reload(features)
         importlib.reload(plugins)

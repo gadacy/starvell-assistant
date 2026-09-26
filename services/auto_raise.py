@@ -1,4 +1,5 @@
 import asyncio
+import html
 from typing import Optional, Dict, Any, List
 from sqlalchemy import select
 from core.database.base import AsyncSessionLocal
@@ -59,8 +60,11 @@ class AutoRaiseService:
                                 notify_enabled = set_n.value.lower() == "true" if set_n else True
                             if notify_enabled:
                                 from tg_bot.bot import send_admin_notification
-                                raised_str = ", ".join(raised)
-                                await send_admin_notification(f"🚀 **Авто-поднятие лотов Starvell:**\nУспешно подняты предложения в категориях: `{raised_str}`")
+                                raised_str = html.escape(", ".join(map(str, raised)))
+                                await send_admin_notification(
+                                    f"🚀 <b>Авто-поднятие лотов Starvell:</b>\n"
+                                    f"Успешно подняты предложения в категориях: <code>{raised_str}</code>"
+                                )
                         if cooldowns:
                             logger.info(f"[AutoRaiseService] ℹ️ Кулдаун для категорий: {cooldowns}")
                     elif isinstance(result, list) and result:

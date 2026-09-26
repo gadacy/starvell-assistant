@@ -20,10 +20,20 @@ class Base(DeclarativeBase):
 from sqlalchemy import select, text
 
 async def init_db():
+    import core.database.models  # Ensure all model tables are registered in Base.metadata
+
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
         try:
             await conn.execute(text("ALTER TABLE seen_chats ADD COLUMN last_seen_at DATETIME"))
+        except Exception:
+            pass
+        try:
+            await conn.execute(text("ALTER TABLE order_history ADD COLUMN order_uuid VARCHAR(100)"))
+        except Exception:
+            pass
+        try:
+            await conn.execute(text("ALTER TABLE order_history ADD COLUMN chat_id VARCHAR(100)"))
         except Exception:
             pass
 

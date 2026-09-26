@@ -7,6 +7,7 @@ from core.database.models import AutoResponse, StockItem, BotSetting
 from core.logger import logger
 from starvell.client import StarvellClient
 from starvell.models import StarvellEvent, StarvellMessage, StarvellOrder
+from services.chat_state import has_purchase, record_order_purchase
 
 class AutoResponderService:
     def __init__(self, client: StarvellClient):
@@ -23,6 +24,10 @@ class AutoResponderService:
             return True
 
     async def process_message(self, message: StarvellMessage, order: Optional[StarvellOrder] = None) -> bool:
+        if order:
+            await record_order_purchase(order)
+        if await has_purchase(message.chat_id, message.sender_id):
+            return False
         if not await self.is_enabled():
             return False
 
@@ -55,8 +60,7 @@ class AutoResponderService:
             if matched:
                 response_text = await self._format_text(rule.response_text, message, order)
                 logger.info(f"[AutoResponder] Matched rule '{rule.title}'. Sending reply to chat {message.chat_id}")
-                await self.client.send_message(message.chat_id, response_text, is_auto=True)
-                return True
+                return await self.client.send_message(message.chat_id, response_text, is_auto=True)
 
         return False
 
@@ -81,7 +85,7 @@ class AutoResponderService:
             "{buyer_id}": message.sender_id or "",
             "{order_id}": order.id if order else "—",
             "{lot_name}": order.lot_title if order else "—",
-            "{price}": f"{order.price:.2f}" if order else "—",
+            "{price}": f"{(order.price or 0.0):.2f}" if order else "—",
             "{time}": now.strftime("%H:%M:%S"),
             "{date}": now.strftime("%Y-%m-%d"),
             "{stock_count}": stock_count

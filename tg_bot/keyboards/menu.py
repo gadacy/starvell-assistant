@@ -39,18 +39,6 @@ def get_settings_kb(responder: bool, delivery: bool, raise_lots: bool, watermark
         ],
         [
             InlineKeyboardButton(
-                text=f"Авто-выдача: {'🟢 ВКЛ' if delivery else '🔴 ВЫКЛ'}",
-                callback_data="toggle_auto_delivery"
-            )
-        ],
-        [
-            InlineKeyboardButton(
-                text=f"Авто-поднятие: {'🟢 ВКЛ' if raise_lots else '🔴 ВЫКЛ'}",
-                callback_data="toggle_auto_raise"
-            )
-        ],
-        [
-            InlineKeyboardButton(
                 text=f"Водяной знак: {'🟢 ВКЛ' if watermark else '🔴 ВЫКЛ'}",
                 callback_data="toggle_watermark_enabled"
             ),
@@ -108,6 +96,9 @@ def get_notifications_kb(settings: dict) -> InlineKeyboardMarkup:
         ],
         [
             InlineKeyboardButton(text="🧪 Проверить уведомление о покупке", callback_data="test_purchase_notification")
+        ],
+        [
+            InlineKeyboardButton(text="⭐ Проверить уведомление об отзыве", callback_data="test_review_notification")
         ],
         [
             InlineKeyboardButton(text="◀️ Главное меню", callback_data="menu_main")

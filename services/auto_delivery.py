@@ -1,3 +1,4 @@
+import html
 from datetime import datetime
 from typing import Optional, Callable, Awaitable
 from sqlalchemy import select, update
@@ -36,28 +37,30 @@ class AutoDeliveryService:
                 select(OrderHistory).where(OrderHistory.order_id == str(order.id))
             )
             order_record = existing.scalar_one_or_none()
-            if order_record and order_record.status == "delivered":
+            if order_record and order_record.status in ("delivered", "completed"):
                 logger.info(f"[AutoDelivery] Order {order.id} already delivered. Skipping.")
                 return False
 
-            # Search for available line item stock
+            # An order may contain several units; never deliver only the first key.
+            quantity = max(1, int(order.amount or 1))
             res = await session.execute(
                 select(StockItem).where(
                     StockItem.lot_id == str(order.lot_id),
                     StockItem.is_used == False
-                ).limit(1)
+                ).order_by(StockItem.id).limit(quantity)
             )
-            stock_item = res.scalar_one_or_none()
+            stock_items = res.scalars().all()
 
             delivered_text = ""
-            if stock_item:
-                stock_item.is_used = True
-                stock_item.used_at = datetime.utcnow()
-                stock_item.order_id = str(order.id)
-                stock_item.buyer_id = str(order.buyer_id)
-                delivered_text = stock_item.item_data
-                await session.commit()
-                logger.info(f"[AutoDelivery] Stock item #{stock_item.id} used for order {order.id}")
+            if len(stock_items) == quantity:
+                for stock_item in stock_items:
+                    stock_item.is_used = True
+                    stock_item.used_at = datetime.utcnow()
+                    stock_item.order_id = str(order.id)
+                    stock_item.buyer_id = str(order.buyer_id)
+                delivered_text = "\n\n".join(item.item_data for item in stock_items)
+                # Reserve the item in this transaction. Roll it back if chat delivery fails.
+                await session.flush()
             else:
                 # Check for template text rule in AutoResponse
                 resp_res = await session.execute(
@@ -71,11 +74,12 @@ class AutoDeliveryService:
                 if template_rule:
                     delivered_text = template_rule.response_text
                 else:
-                    logger.warning(f"[AutoDelivery] NO STOCK AND NO TEMPLATE FOR LOT {order.lot_id}! Order {order.id}")
+                    logger.warning(f"[AutoDelivery] Insufficient stock ({len(stock_items)}/{quantity}) and no template for lot {order.lot_id}, order {order.id}")
                     if self.telegram_notifier:
                         await self.telegram_notifier(
-                            f"⚠️ **ВНИМАНИЕ! Закончился товар!**\n"
-                            f"Заказ `#${order.id}` на лот **{order.lot_title}** не может быть выдан авто-выдачей, так как запасы пустые!"
+                            f"⚠️ <b>ВНИМАНИЕ! Закончился товар!</b>\n"
+                            f"Заказ <code>#{html.escape(str(order.id))}</code> на лот "
+                            f"<b>{html.escape(str(order.lot_title))}</b> не может быть выдан автоматически: недостаточно товара ({len(stock_items)}/{quantity})."
                         )
                     return False
 
@@ -84,17 +88,33 @@ class AutoDeliveryService:
             full_delivery_message = f"{header_message}{delivered_text}\n\nСпасибо за покупку! Оставьте, пожалуйста, отзыв!"
 
             chat_id = order.chat_id or order.buyer_id
-            sent_ok = await self.client.send_message(chat_id, full_delivery_message, is_auto=True)
+            if not chat_id:
+                logger.error(f"[AutoDelivery] No chat or buyer ID for order {order.id}")
+                await session.rollback()
+                return False
+            try:
+                sent_ok = await self.client.send_message(chat_id, full_delivery_message, is_auto=True)
+            except Exception as e:
+                logger.error(f"[AutoDelivery] Failed to send order {order.id}: {e}")
+                await session.rollback()
+                return False
+            if not sent_ok:
+                logger.error(f"[AutoDelivery] Chat delivery failed for order {order.id}; stock remains available.")
+                await session.rollback()
+                return False
 
             # Record in OrderHistory
+            order_price = float(order.total_price or order.price or 0.0)
             if not order_record:
                 order_record = OrderHistory(
                     order_id=str(order.id),
+                    order_uuid=order.full_id,
+                    chat_id=str(chat_id or ""),
                     buyer_id=str(order.buyer_id),
                     buyer_name=order.buyer_name,
                     lot_id=str(order.lot_id),
                     lot_title=order.lot_title,
-                    price=order.total_price or order.price,
+                    price=order_price,
                     status="delivered",
                     delivered_content=delivered_text
                 )
@@ -102,8 +122,14 @@ class AutoDeliveryService:
             else:
                 order_record.status = "delivered"
                 order_record.delivered_content = delivered_text
+                if order.full_id and not order_record.order_uuid:
+                    order_record.order_uuid = order.full_id
+                if chat_id and not order_record.chat_id:
+                    order_record.chat_id = str(chat_id)
 
             await session.commit()
+            if len(stock_items) == quantity:
+                logger.info(f"[AutoDelivery] {quantity} stock item(s) used for order {order.id}")
 
             # Notify Admin in Telegram
             async with AsyncSessionLocal() as db_session:
@@ -113,11 +139,11 @@ class AutoDeliveryService:
 
             if self.telegram_notifier and notify_enabled:
                 await self.telegram_notifier(
-                    f"🎉 **Автовыдача завершена!**\n"
-                    f"📦 **Заказ:** `{order.id}`\n"
-                    f"👤 **Покупатель:** {order.buyer_name}\n"
-                    f"💵 **Сумма:** {order.total_price:.2f} RUB\n"
-                    f"🛒 **Лот:** {order.lot_title}"
+                    f"🎉 <b>Автовыдача завершена!</b>\n"
+                    f"📦 <b>Заказ:</b> <code>{html.escape(str(order.id))}</code>\n"
+                    f"👤 <b>Покупатель:</b> {html.escape(str(order.buyer_name))}\n"
+                    f"💵 <b>Сумма:</b> {order_price:.2f} RUB\n"
+                    f"🛒 <b>Лот:</b> {html.escape(str(order.lot_title))}"
                 )
 
             return sent_ok

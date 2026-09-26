@@ -75,11 +75,26 @@ class PluginManager:
             state.settings_json = json.dumps(settings_dict, ensure_ascii=False)
             await session.commit()
 
-    async def load_all_plugins(self):
-        """Scan plugins directory, dynamically import .py modules, and initialize plugins."""
+    async def unload_all_plugins(self):
+        """Unload and stop all running plugins."""
+        for name, plugin in list(self.loaded_plugins.items()):
+            try:
+                await plugin.on_unload()
+                logger.info(f"[PluginManager] Plugin '{name}' unloaded.")
+            except Exception as e:
+                logger.error(f"[PluginManager] Error unloading plugin '{name}': {e}")
         self.loaded_plugins.clear()
         self.plugin_files.clear()
         self.plugin_states.clear()
+
+    async def load_all_plugins(self):
+        """Scan plugins directory, dynamically import .py modules, and initialize plugins."""
+        if self.loaded_plugins:
+            await self.unload_all_plugins()
+        else:
+            self.loaded_plugins.clear()
+            self.plugin_files.clear()
+            self.plugin_states.clear()
 
         if not os.path.exists(self.plugins_dir):
             return
@@ -200,9 +215,11 @@ class PluginManager:
         except Exception as e:
             return False, f"❌ Ошибка синтаксиса Python в файле `{filename}`:\n`{e}`"
 
-        safe_name = "".join(c for c in filename if c.isalnum() or c in ("_", "-", "."))
-        if not safe_name.endswith(".py"):
-            safe_name += ".py"
+        base_name = os.path.basename(filename)
+        safe_base = "".join(c for c in base_name if c.isalnum() or c in ("_", "-"))
+        if not safe_base:
+            safe_base = "custom_plugin"
+        safe_name = f"{safe_base}.py"
 
         target_path = os.path.join(self.plugins_dir, safe_name)
         with open(target_path, "wb") as f:

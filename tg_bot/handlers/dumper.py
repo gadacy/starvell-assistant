@@ -19,12 +19,6 @@ class DumperAddState(StatesGroup):
 def get_dumper_menu_kb(rules_count: int, is_enabled: bool) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(
-                text=f"Статус плагина PriceDumper: {'🟢 ВКЛ' if is_enabled else '🔴 ВЫКЛ'}",
-                callback_data="plugin_toggle:PriceDumper"
-            )
-        ],
-        [
             InlineKeyboardButton(text="➕ Добавить правило для лота", callback_data="dumper_add_rule")
         ],
         [
@@ -50,6 +44,7 @@ async def cb_dumper_menu(call: CallbackQuery):
         "📉 **Панель Авто-демпинга цен (Плагин PriceDumper):**\n\n"
         "Автодемпер отслеживает конкурентов и сбрасывает цену вашего лота на заданный шаг, "
         "но **НЕ НИЖЕ указанного порога (минимальной цены)!**\n\n"
+        f"Статус плагина: {'🟢 Включен' if is_enabled else '🔴 Выключен'}. Изменить его можно в карточке плагина.\n\n"
         f"📊 **Активных правил:** `{len(rules)}`"
     )
     await call.message.edit_text(text, reply_markup=get_dumper_menu_kb(len(rules), is_enabled), parse_mode="Markdown")

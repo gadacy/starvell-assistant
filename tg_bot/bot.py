@@ -3,8 +3,8 @@ from typing import Optional
 from aiogram import Bot, Dispatcher
 from config import config
 from core.logger import logger
-from tg_bot.handlers import common, stock, auto_response, auto_delivery, stats, features, dumper, auto_raise, plugins
-from tg_bot.middlewares import AdminAuthMiddleware
+from tg_bot.handlers import common, stock, auto_response, auto_delivery, stats, features, dumper, auto_raise, plugins, chat
+from tg_bot.middlewares import AdminAuthMiddleware, ChatNavigationMiddleware
 
 bot: Optional[Bot] = None
 dp: Optional[Dispatcher] = None
@@ -23,9 +23,12 @@ def init_telegram_bot() -> tuple[Optional[Bot], Optional[Dispatcher]]:
     admin_middleware = AdminAuthMiddleware()
     dp.message.outer_middleware(admin_middleware)
     dp.callback_query.outer_middleware(admin_middleware)
+    dp.message.outer_middleware(ChatNavigationMiddleware())
+    dp.callback_query.outer_middleware(ChatNavigationMiddleware())
 
     # Register routers
     routers = [
+        chat.router,
         common.router,
         stock.router,
         auto_response.router,
@@ -118,4 +121,3 @@ async def send_admin_startup_panel():
             await bot.send_message(admin_id, text, reply_markup=kb, parse_mode="HTML", disable_web_page_preview=True)
         except Exception as e:
             logger.error(f"[TelegramBot] Ошибка отправки панели администратору {admin_id}: {e}")
-

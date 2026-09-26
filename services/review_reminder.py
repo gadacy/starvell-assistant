@@ -81,7 +81,9 @@ class ReviewReminderService:
             delivered_orders = res.scalars().all()
 
             for order in delivered_orders:
-                chat_id = order.buyer_id
+                chat_id = order.chat_id or order.buyer_id
+                if not chat_id:
+                    continue
                 logger.info(f"[ReviewReminder] Sending review reminder to buyer {order.buyer_name} for order {order.order_id}")
                 sent_ok = await self.client.send_message(chat_id, reminder_text, is_auto=True)
                 if sent_ok:
