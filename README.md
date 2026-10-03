@@ -5,12 +5,18 @@
   <a href="https://www.python.org/"><img src="https://img.shields.io/badge/Python-3.10%2B-blue.svg" alt="Python"></a>
   <a href="https://github.com/aiogram/aiogram"><img src="https://img.shields.io/badge/aiogram-v3.x-2CA5E0.svg" alt="aiogram"></a>
   <a href="https://github.com/gadacy"><img src="https://img.shields.io/badge/Author-gadacy-brightgreen.svg" alt="Author"></a>
-  <a href="https://t.me/starvell_assistant"><img src="https://img.shields.io/badge/Telegram-@starvell__assistant-blue.svg" alt="Telegram Channel"></a>
+  <a href="https://t.me/StarAssis"><img src="https://img.shields.io/badge/%D0%A7%D0%B0%D1%82-@StarAssis-blue.svg" alt="Telegram Chat"></a>
+  <a href="https://t.me/starvell_assistant"><img src="https://img.shields.io/badge/%D0%9A%D0%B0%D0%BD%D0%B0%D0%BB-@starvell__assistant-blue.svg" alt="Telegram Channel"></a>
+  <a href="https://t.me/StarPlugin"><img src="https://img.shields.io/badge/%D0%9F%D0%BB%D0%B0%D0%B3%D0%B8%D0%BD%D1%8B-@StarPlugin-blue.svg" alt="Telegram Plugins"></a>
+  <a href="https://t.me/addlist/QmOelFMfLqE0MWEy"><img src="https://img.shields.io/badge/Telegram-%D0%9F%D0%B0%D0%BF%D0%BA%D0%B0_%D1%87%D0%B0%D1%82%D0%BE%D0%B2-2CA5E0.svg" alt="Telegram Folder"></a>
   <a href="https://bhost.fun/r/starassis"><img src="https://img.shields.io/badge/%D0%A5%D0%BE%D1%81%D1%82%D0%B8%D0%BD%D0%B3-BHost_(--5%25)-orange.svg" alt="Хостинг BHost"></a>
 </p>
 
-<h2 align="center">Перед началом настоятельно рекомендую залететь в наш <a href="https://t.me/starvell_assistant">Telegram
+<h2 align="center">Перед началом настоятельно рекомендую залететь в наш <a href="https://t.me/StarAssis">Telegram
 чат (клик)</a>. Тут и поможем чем сможем и посидеть можно.</h2>
+<p align="center">
+  📁 <b><a href="https://t.me/addlist/QmOelFMfLqE0MWEy">Добавить папку со всеми чатами и каналами проекта в Telegram (клик)</a></b>
+</p>
 
 ## :clipboard: **Содержание**
 
@@ -88,7 +94,7 @@
 
 ## :electric_plug: Плагины
 
-- [Канал с плагинами](https://t.me/starvell_assistant)
+- [Канал с плагинами](https://t.me/StarPlugin)
 
 ## :cloud: Хостинг
 
@@ -196,7 +202,12 @@
 
 ## :question: Мне нужна помощь
 
-Если у вас остались какие-либо вопросы, мы с радостью ответим на них в нашем [Telegram чате](https://t.me/starvell_assistant).
+Если у вас остались какие-либо вопросы, мы с радостью ответим на них в нашем сообществе:
+
+- 💬 **Telegram чат:** [@StarAssis](https://t.me/StarAssis)
+- 📢 **Канал проекта:** [@starvell_assistant](https://t.me/starvell_assistant)
+- 🧩 **Канал с плагинами:** [@StarPlugin](https://t.me/StarPlugin)
+- 📁 **Все ресурсы разом:** [Добавить папку в Telegram](https://t.me/addlist/QmOelFMfLqE0MWEy)
 
 ## :star: Star it
 

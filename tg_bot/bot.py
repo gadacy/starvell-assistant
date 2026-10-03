@@ -69,15 +69,18 @@ async def setup_bot_profile():
         return
     try:
         from aiogram.types import BotCommand
-        short_desc = "Starvell Assistant Bot @starvell_assistant | github.com/gadacy/starvell-assistant"
+        short_desc = "Starvell Assistant Bot @StarAssis | github.com/gadacy/starvell-assistant"
         description = (
             "🤖 Starvell Assistant Bot — многофункциональный автобот для торговой площадки Starvell.com.\n\n"
+            "💬 Чат проекта: @StarAssis\n"
             "📢 Канал проекта: @starvell_assistant\n"
+            "🧩 Плагины: @StarPlugin\n"
+            "📁 Папка ресурсов: https://t.me/addlist/QmOelFMfLqE0MWEy\n"
             "🐙 GitHub: github.com/gadacy/starvell-assistant\n\n"
             "⚡ Возможности:\n"
             "• 💬 Живой чат & Пересылка сообщений\n"
             "• ⚡ Автовыдача и автоподнятие лотов\n"
-            "• 📉 Демпинг цен и авто-ответчик\n"
+            "• 🤖 Авто-ответчик & Быстрые ответы\n"
             "• ⭐ Напоминалка про отзывы"
         )
         await bot.set_my_short_description(short_desc[:120])
@@ -106,12 +109,15 @@ async def send_admin_startup_panel():
 
     text = (
         "🚀 <b>Starvell Assistant Bot успешно запущен!</b>\n\n"
+        "💬 <b>Чат проекта:</b> @StarAssis\n"
         "📢 <b>Канал проекта:</b> @starvell_assistant\n"
+        "🧩 <b>Канал плагинов:</b> @StarPlugin\n"
+        "📁 <b>Папка ресурсов:</b> https://t.me/addlist/QmOelFMfLqE0MWEy\n"
         "🐙 <b>GitHub:</b> github.com/gadacy/starvell-assistant\n\n"
         "🟢 <b>Все службы активны:</b>\n"
         "• 💬 Живой чат & Пересылка сообщений\n"
         "• ⚡ Автовыдача и автоподнятие лотов\n"
-        "• 📉 Демпинг цен и авто-ответчик\n"
+        "• 🤖 Авто-ответчик & Быстрые ответы\n"
         "• ⭐ Напоминалка про отзывы\n\n"
         "👇 <b>Панель управления бота:</b>"
     )

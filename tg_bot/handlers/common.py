@@ -29,7 +29,10 @@ async def cmd_start(message: Message, state: FSMContext):
     await state.clear()
     welcome_text = (
         f"👑 <b>Starvell Assistant Bot</b> (v{__version__})\n\n"
+        "💬 <b>Чат проекта:</b> @StarAssis\n"
         "📢 <b>Канал проекта:</b> @starvell_assistant\n"
+        "🧩 <b>Плагины:</b> @StarPlugin\n"
+        "📁 <b>Папка чатов:</b> https://t.me/addlist/QmOelFMfLqE0MWEy\n"
         "🐙 <b>GitHub:</b> github.com/gadacy/starvell-assistant\n\n"
         "Бот успешно запущен и готов к работе.\n"
         "Используйте меню ниже для управления авто-ответом, авто-выдачей, лотами и просмотра статистики."
