@@ -6,7 +6,7 @@
   <a href="https://github.com/aiogram/aiogram"><img src="https://img.shields.io/badge/aiogram-v3.x-2CA5E0.svg" alt="aiogram"></a>
   <a href="https://github.com/gadacy"><img src="https://img.shields.io/badge/Author-gadacy-brightgreen.svg" alt="Author"></a>
   <a href="https://t.me/starvell_assistant"><img src="https://img.shields.io/badge/Telegram-@starvell__assistant-blue.svg" alt="Telegram Channel"></a>
-  <a href="https://bhost.fun/r/starassis"><img src="https://img.shields.io/badge/Хостинг-BHost%20(-5%25)-orange.svg" alt="Хостинг BHost"></a>
+  <a href="https://bhost.fun/r/starassis"><img src="https://img.shields.io/badge/%D0%A5%D0%BE%D1%81%D1%82%D0%B8%D0%BD%D0%B3-BHost_(--5%25)-orange.svg" alt="Хостинг BHost"></a>
 </p>
 
 <h2 align="center">Перед началом настоятельно рекомендую залететь в наш <a href="https://t.me/starvell_assistant">Telegram
