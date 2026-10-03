@@ -12,6 +12,7 @@ from starvell.client import StarvellClient
 from starvell.listener import StarvellListener
 from starvell.models import StarvellOrder
 from tg_bot.middlewares import AdminAuthMiddleware
+from tg_bot.handlers.stock import cb_stock_list, cb_stock_view, cb_stock_download
 
 
 class DeliveryTests(unittest.IsolatedAsyncioTestCase):
@@ -99,6 +100,69 @@ class EventAndSecurityTests(unittest.IsolatedAsyncioTestCase):
         client.get_client = AsyncMock(return_value=http_client)
         self.assertFalse(await client.send_message("chat-1", "hello"))
         self.assertEqual(http_client.post.await_count, 3)
+
+
+class StockInspectionTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        self.engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        async with self.engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        self.sessions = async_sessionmaker(self.engine, expire_on_commit=False)
+        async with self.sessions() as session:
+            session.add_all([
+                StockItem(lot_id="lot-1", item_data=f"key-{i}") for i in range(12)
+            ] + [
+                StockItem(lot_id="lot-1", item_data="used-key", is_used=True),
+                StockItem(lot_id="lot-2", item_data="<secret>&"),
+            ])
+            await session.commit()
+
+    async def asyncTearDown(self):
+        await self.engine.dispose()
+
+    def callback(self, data):
+        call = MagicMock()
+        call.data = data
+        call.message.chat.type = "private"
+        call.message.edit_text = AsyncMock()
+        call.message.answer_document = AsyncMock()
+        call.answer = AsyncMock()
+        return call
+
+    async def test_list_preview_and_full_download_exclude_used_items(self):
+        with patch("tg_bot.handlers.stock.AsyncSessionLocal", self.sessions):
+            listing = self.callback("stock_list")
+            await cb_stock_list(listing)
+            buttons = listing.message.edit_text.call_args.kwargs["reply_markup"].inline_keyboard
+            self.assertEqual(len(buttons), 3)
+            view_data = buttons[0][0].callback_data
+
+            detail = self.callback(view_data)
+            await cb_stock_view(detail)
+            preview = detail.message.edit_text.call_args.args[0]
+            self.assertIn("key-0", preview)
+            self.assertIn("key-9", preview)
+            self.assertNotIn("key-10", preview)
+            self.assertNotIn("used-key", preview)
+            download_data = detail.message.edit_text.call_args.kwargs["reply_markup"].inline_keyboard[0][0].callback_data
+
+            download = self.callback(download_data)
+            await cb_stock_download(download)
+            document = download.message.answer_document.call_args.args[0]
+            content = document.data.decode("utf-8")
+            self.assertEqual(content.splitlines(), [f"key-{i}" for i in range(12)])
+
+            other = self.callback(buttons[1][0].callback_data)
+            await cb_stock_view(other)
+            self.assertIn("&lt;secret&gt;&amp;", other.message.edit_text.call_args.args[0])
+
+    async def test_stock_contents_are_private(self):
+        with patch("tg_bot.handlers.stock.AsyncSessionLocal", self.sessions):
+            call = self.callback("stock_view:1")
+            call.message.chat.type = "group"
+            await cb_stock_view(call)
+            call.message.edit_text.assert_not_awaited()
+            call.answer.assert_awaited_once()
 
 
 async def _append_event(events, event):

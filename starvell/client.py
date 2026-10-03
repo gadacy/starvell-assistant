@@ -18,6 +18,7 @@ class StarvellClient:
         
         self._build_id: Optional[str] = None
         self._build_id_fetched_at: float = 0.0
+        self._build_id_lock = asyncio.Lock()
         self._logged_errors: Set[str] = set()
         self.public_id: Optional[str] = None
         self.user_id: Optional[str] = None
@@ -101,68 +102,106 @@ class StarvellClient:
             else:
                 logger.error(message)
 
-    # --- Next.js Build ID Extractor ---
-    async def get_build_id(self) -> str:
-        now = time.time()
-        if self._build_id and (now - self._build_id_fetched_at) < 1800:
-            return self._build_id
-
+    async def _get_next_response(self, url: str, headers: Optional[Dict[str, str]] = None) -> httpx.Response:
+        """Retry transient failures only for read-only Next.js requests."""
         client = await self.get_client()
-        try:
-            res = await client.get(f"{self.base_url}/")
-            if res.status_code == 200:
-                match = re.search(r'id="__NEXT_DATA__"[^>]*>(.*?)</script>', res.text, re.DOTALL)
-                if match:
-                    data = json.loads(match.group(1))
-                    self._build_id = data.get("buildId")
-                    self._build_id_fetched_at = now
-                    page_props = data.get("props", {}).get("pageProps", {})
-                    u_info = page_props.get("user", {})
-                    if u_info and isinstance(u_info, dict):
-                        if u_info.get("publicId"):
-                            self.public_id = str(u_info.get("publicId"))
-                        if u_info.get("id"):
-                            self.user_id = str(u_info.get("id"))
-                        if u_info.get("username"):
-                            self.username = str(u_info.get("username"))
-                    logger.info(f"[StarvellClient] Next.js Build ID extracted: {self._build_id}")
-                    return self._build_id
-        except Exception as e:
-            self._log_once("build_id_err", "warning", f"[StarvellClient] Ошибка получения Next.js build_id: {e}")
+        for attempt in range(2):
+            try:
+                res = await client.get(
+                    url, headers=headers,
+                    timeout=httpx.Timeout(30.0, connect=10.0, pool=10.0),
+                )
+                if res.status_code not in (408, 500, 502, 503, 504) or attempt == 1:
+                    return res
+            except (httpx.TimeoutException, httpx.NetworkError, httpx.RemoteProtocolError):
+                if attempt == 1:
+                    raise
+            await asyncio.sleep(1.0)
 
-        self._build_id = "default"
-        return self._build_id
+    @staticmethod
+    def _request_error_details(error: Exception) -> str:
+        details = str(error).strip()
+        if not details and isinstance(error, httpx.TimeoutException):
+            details = "превышено время ожидания запроса"
+        return f"{type(error).__name__}: {details}" if details else type(error).__name__
+
+    def _update_user_info(self, page_props: Dict[str, Any]):
+        if not isinstance(page_props, dict):
+            raise ValueError("Next.js pageProps должен быть JSON-объектом")
+        u_info = page_props.get("user")
+        if isinstance(u_info, dict):
+            if u_info.get("publicId"):
+                self.public_id = str(u_info["publicId"])
+            if u_info.get("id"):
+                self.user_id = str(u_info["id"])
+            if u_info.get("username"):
+                self.username = str(u_info["username"])
+
+    # --- Next.js Build ID Extractor ---
+    async def get_build_id(self) -> Optional[str]:
+        async with self._build_id_lock:
+            if self._build_id and (time.time() - self._build_id_fetched_at) < 1800:
+                return self._build_id
+
+            try:
+                res = await self._get_next_response(f"{self.base_url}/")
+                res.raise_for_status()
+                match = re.search(r'id="__NEXT_DATA__"[^>]*>(.*?)</script>', res.text, re.DOTALL)
+                if not match:
+                    raise ValueError("На странице отсутствует __NEXT_DATA__")
+                data = json.loads(match.group(1))
+                build_id = data.get("buildId") if isinstance(data, dict) else None
+                if not isinstance(build_id, str) or not build_id.strip():
+                    raise ValueError("В __NEXT_DATA__ отсутствует buildId")
+                self._update_user_info(data.get("props", {}).get("pageProps", {}))
+                self._build_id = build_id
+                self._build_id_fetched_at = time.time()
+                self._logged_errors.discard("build_id_err")
+                logger.info(f"[StarvellClient] Next.js Build ID extracted: {self._build_id}")
+            except Exception as e:
+                self._log_once(
+                    "build_id_err", "warning",
+                    f"[StarvellClient] Ошибка получения Next.js build_id: {self._request_error_details(e)}",
+                )
+
+            # Keep a previously valid ID during a temporary homepage failure.
+            # Never request /_next/data/default/... when discovery fails.
+            return self._build_id
 
     async def get_next_data(self, path: str) -> Dict[str, Any]:
         """
         Fetch data from Next.js Data API: /_next/data/{build_id}/{path}
         """
-        build_id = await self.get_build_id()
-        client = await self.get_client()
-        url = f"{self.base_url}/_next/data/{build_id}/{path}"
-        
         headers = dict(self.headers)
         headers["x-nextjs-data"] = "1"
+        error_key = f"next_data_{path}"
 
         try:
-            res = await client.get(url, headers=headers)
-            if res.status_code == 200:
+            for attempt in range(2):
+                build_id = await self.get_build_id()
+                if not build_id:
+                    return {}
+                url = f"{self.base_url}/_next/data/{build_id}/{path}"
+                res = await self._get_next_response(url, headers=headers)
+                if res.status_code == 404:
+                    # Do not discard a newer ID discovered by another request.
+                    if self._build_id == build_id:
+                        self._build_id = None
+                        self._build_id_fetched_at = 0.0
+                    if attempt == 0:
+                        continue
+                res.raise_for_status()
                 data = res.json()
-                page_props = data.get("pageProps", {})
-                u_info = page_props.get("user", {})
-                if u_info and isinstance(u_info, dict):
-                    if u_info.get("publicId"):
-                        self.public_id = str(u_info.get("publicId"))
-                    if u_info.get("id"):
-                        self.user_id = str(u_info.get("id"))
-                    if u_info.get("username"):
-                        self.username = str(u_info.get("username"))
+                if not isinstance(data, dict):
+                    raise ValueError("Next.js Data API вернул не JSON-объект")
+                self._update_user_info(data.get("pageProps", {}))
+                self._logged_errors.discard(error_key)
                 return data
-            elif res.status_code == 404:
-                # Next.js build ID might be stale after Starvell deployment
-                self._build_id = None
         except Exception as e:
-            self._log_once(f"next_data_{path}", "warning", f"[StarvellClient] Ошибка Next.js Data API ({path}): {e}")
+            self._log_once(
+                error_key, "warning",
+                f"[StarvellClient] Ошибка Next.js Data API ({path}): {self._request_error_details(e)}",
+            )
 
         return {}
 

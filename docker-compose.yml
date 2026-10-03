@@ -1,0 +1,13 @@
+version: '3.8'
+
+services:
+  starvell-assistant:
+    build: .
+    container_name: starvell_assistant
+    restart: unless-stopped
+    volumes:
+      - ./.env:/app/.env
+      - ./config.json:/app/config.json
+      - ./starvell_bot.db:/app/starvell_bot.db
+      - ./plugins:/app/plugins
+      - ./logs:/app/logs
