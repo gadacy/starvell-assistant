@@ -48,6 +48,9 @@ def get_settings_kb(responder: bool, delivery: bool, raise_lots: bool, watermark
             )
         ],
         [
+            InlineKeyboardButton(text="👥 Администраторы & Доступ", callback_data="menu_admins")
+        ],
+        [
             InlineKeyboardButton(text="🔄 Проверить обновления", callback_data="menu_check_updates")
         ],
         [
@@ -55,6 +58,26 @@ def get_settings_kb(responder: bool, delivery: bool, raise_lots: bool, watermark
         ]
     ])
     return keyboard
+
+def get_admins_kb(admin_ids: list[int]) -> InlineKeyboardMarkup:
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="➕ Добавить ID", callback_data="admin_add"),
+            InlineKeyboardButton(text="➖ Удалить ID", callback_data="admin_remove_list")
+        ],
+        [
+            InlineKeyboardButton(text="◀️ Назад в настройки", callback_data="menu_settings")
+        ]
+    ])
+    return keyboard
+
+def get_admin_delete_kb(admin_ids: list[int], current_user_id: int) -> InlineKeyboardMarkup:
+    buttons = []
+    for aid in admin_ids:
+        label = f"❌ {aid} (Вы)" if aid == current_user_id else f"❌ ID {aid}"
+        buttons.append([InlineKeyboardButton(text=label, callback_data=f"admin_del_{aid}")])
+    buttons.append([InlineKeyboardButton(text="◀️ Назад к списку", callback_data="menu_admins")])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 def get_notifications_kb(settings: dict) -> InlineKeyboardMarkup:
     keyboard = InlineKeyboardMarkup(inline_keyboard=[

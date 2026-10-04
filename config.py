@@ -112,3 +112,43 @@ def reload_config() -> Config:
     return config
 
 config = load_config()
+
+def _sync_env_admin_ids() -> None:
+    """Synchronizes telegram_admin_ids into the .env file if it exists."""
+    env_file = BASE_DIR / ".env"
+    if not env_file.exists():
+        return
+    try:
+        content = env_file.read_text(encoding="utf-8")
+        ids_str = ",".join(str(i) for i in config.telegram_admin_ids)
+        lines = []
+        replaced = False
+        for line in content.splitlines():
+            if line.startswith("TELEGRAM_ADMIN_IDS="):
+                lines.append(f"TELEGRAM_ADMIN_IDS={ids_str}")
+                replaced = True
+            else:
+                lines.append(line)
+        if not replaced:
+            lines.append(f"TELEGRAM_ADMIN_IDS={ids_str}")
+        env_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    except Exception:
+        pass
+
+def add_admin_id(admin_id: int) -> bool:
+    """Adds a new Telegram user ID to the authorized admin list and persists the update."""
+    if admin_id in config.telegram_admin_ids:
+        return False
+    config.telegram_admin_ids.append(admin_id)
+    save_config(config)
+    _sync_env_admin_ids()
+    return True
+
+def remove_admin_id(admin_id: int) -> bool:
+    """Removes a Telegram user ID from the authorized admin list and persists the update."""
+    if admin_id not in config.telegram_admin_ids:
+        return False
+    config.telegram_admin_ids.remove(admin_id)
+    save_config(config)
+    _sync_env_admin_ids()
+    return True

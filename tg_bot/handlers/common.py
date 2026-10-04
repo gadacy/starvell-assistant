@@ -10,12 +10,15 @@ from core.database.models import BotSetting
 from config import config
 from version import __version__
 from services.update_checker import UpdateCheckerService
-from tg_bot.keyboards.menu import get_main_menu_kb, get_settings_kb, get_notifications_kb, get_back_kb
+from tg_bot.keyboards.menu import get_main_menu_kb, get_settings_kb, get_notifications_kb, get_back_kb, get_admins_kb, get_admin_delete_kb
 
 router = Router()
 
 class WatermarkState(StatesGroup):
     waiting_for_text = State()
+
+class AdminManagementState(StatesGroup):
+    waiting_for_admin_id = State()
 
 def is_admin(user_id: int) -> bool:
     return user_id in config.telegram_admin_ids
@@ -172,6 +175,200 @@ async def process_watermark_text(message: Message, state: FSMContext):
     await message.answer(
         f"✅ <b>Водяной знак успешно обновлен!</b>\n\n<code>{new_text}</code>",
         reply_markup=get_back_kb(),
+        parse_mode="HTML"
+    )
+
+# --- Admins / Access Management ---
+@router.message(Command("admins"))
+@router.callback_query(F.data == "menu_admins")
+async def handle_admins_menu(event: Message | CallbackQuery, state: FSMContext = None):
+    user_id = event.from_user.id
+    if not is_admin(user_id):
+        return
+
+    if state:
+        await state.clear()
+
+    admin_ids = config.telegram_admin_ids
+    lines = []
+    for idx, aid in enumerate(admin_ids, 1):
+        suffix = " 👑 (Вы)" if aid == user_id else ""
+        lines.append(f"{idx}. <code>{aid}</code>{suffix}")
+
+    admins_str = "\n".join(lines) if lines else "<i>Список пуст</i>"
+    text = (
+        "👥 <b>Управление администраторами и доступом:</b>\n\n"
+        f"<b>Авторизованные Telegram ID ({len(admin_ids)}):</b>\n{admins_str}\n\n"
+        "💡 Все пользователи из этого списка имеют доступ к панели управления ботом и получают уведомления о заказах и сообщениях.\n\n"
+        "<i>Быстрые команды:</i>\n"
+        "• <code>/add_admin &lt;id&gt;</code> — добавить пользователя\n"
+        "• <code>/del_admin &lt;id&gt;</code> — удалить пользователя"
+    )
+
+    kb = get_admins_kb(admin_ids)
+    if isinstance(event, CallbackQuery):
+        await event.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+    else:
+        await event.answer(text, reply_markup=kb, parse_mode="HTML")
+
+@router.callback_query(F.data == "admin_add")
+async def cb_admin_add(call: CallbackQuery, state: FSMContext):
+    if not is_admin(call.from_user.id):
+        return
+
+    await state.set_state(AdminManagementState.waiting_for_admin_id)
+    cancel_kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="menu_admins")]
+    ])
+    await call.message.edit_text(
+        "➕ <b>Добавление нового пользователя в список доступа:</b>\n\n"
+        "Отправьте численное значение <b>Telegram ID</b> пользователя.\n\n"
+        "💡 <i>Пользователь может узнать свой ID в Telegram через ботов @userinfobot или @myidbot (только цифры).</i>",
+        reply_markup=cancel_kb,
+        parse_mode="HTML"
+    )
+
+@router.message(AdminManagementState.waiting_for_admin_id)
+async def process_add_admin_id(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        return
+
+    text = (message.text or "").strip()
+    if not text.isdigit():
+        cancel_kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="❌ Отмена", callback_data="menu_admins")]
+        ])
+        await message.answer(
+            "⚠️ Неверный формат ID. Telegram ID должен состоять только из цифр (например: <code>123456789</code>).\n"
+            "Попробуйте отправить ID заново или нажмите кнопку отмены:",
+            reply_markup=cancel_kb,
+            parse_mode="HTML"
+        )
+        return
+
+    new_id = int(text)
+    if new_id in config.telegram_admin_ids:
+        await state.clear()
+        await message.answer(
+            f"ℹ️ Пользователь с ID <code>{new_id}</code> уже есть в списке доступа.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="👥 Список администраторов", callback_data="menu_admins")]
+            ]),
+            parse_mode="HTML"
+        )
+        return
+
+    success = config.add_admin_id(new_id)
+    await state.clear()
+    if success:
+        await message.answer(
+            f"✅ <b>Пользователь успешно добавлен!</b>\n\n"
+            f"ID <code>{new_id}</code> теперь имеет доступ к управлению ботом и уведомлениям.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="👥 Список администраторов", callback_data="menu_admins")]
+            ]),
+            parse_mode="HTML"
+        )
+    else:
+        await message.answer("❌ Не удалось добавить пользователя.", reply_markup=get_back_kb())
+
+@router.callback_query(F.data == "admin_remove_list")
+async def cb_admin_remove_list(call: CallbackQuery):
+    if not is_admin(call.from_user.id):
+        return
+
+    if len(config.telegram_admin_ids) <= 1:
+        await call.answer("⚠️ Нельзя удалить единственного администратора!", show_alert=True)
+        return
+
+    kb = get_admin_delete_kb(config.telegram_admin_ids, call.from_user.id)
+    await call.message.edit_text(
+        "➖ <b>Выберите пользователя для отзыва доступа:</b>\n\n"
+        "Нажмите на кнопку с ID пользователя, доступ которого хотите заблокировать:",
+        reply_markup=kb,
+        parse_mode="HTML"
+    )
+
+@router.callback_query(F.data.startswith("admin_del_"))
+async def cb_admin_delete(call: CallbackQuery):
+    user_id = call.from_user.id
+    if not is_admin(user_id):
+        return
+
+    del_id_str = call.data.replace("admin_del_", "")
+    if not del_id_str.isdigit():
+        return
+    del_id = int(del_id_str)
+
+    if len(config.telegram_admin_ids) <= 1:
+        await call.answer("⚠️ Нельзя удалить единственного администратора!", show_alert=True)
+        return
+
+    success = config.remove_admin_id(del_id)
+    if success:
+        await call.answer(f"✅ Доступ для ID {del_id} отозван.", show_alert=True)
+    else:
+        await call.answer("❌ Не удалось найти указанный ID.", show_alert=True)
+
+    await handle_admins_menu(call, None)
+
+@router.message(Command("add_admin"))
+async def cmd_add_admin(message: Message):
+    if not is_admin(message.from_user.id):
+        return
+
+    parts = (message.text or "").split()
+    if len(parts) < 2 or not parts[1].strip().isdigit():
+        await message.answer(
+            "⚠️ <b>Использование:</b> <code>/add_admin &lt;telegram_id&gt;</code>\n"
+            "Пример: <code>/add_admin 123456789</code>",
+            parse_mode="HTML"
+        )
+        return
+
+    new_id = int(parts[1].strip())
+    if new_id in config.telegram_admin_ids:
+        await message.answer(f"ℹ️ ID <code>{new_id}</code> уже есть в списке доступа.", parse_mode="HTML")
+        return
+
+    config.add_admin_id(new_id)
+    await message.answer(
+        f"✅ Пользователь с ID <code>{new_id}</code> успешно добавлен в список доступа.",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="👥 Список администраторов", callback_data="menu_admins")]
+        ]),
+        parse_mode="HTML"
+    )
+
+@router.message(Command("del_admin"))
+async def cmd_del_admin(message: Message):
+    if not is_admin(message.from_user.id):
+        return
+
+    parts = (message.text or "").split()
+    if len(parts) < 2 or not parts[1].strip().isdigit():
+        await message.answer(
+            "⚠️ <b>Использование:</b> <code>/del_admin &lt;telegram_id&gt;</code>\n"
+            "Пример: <code>/del_admin 123456789</code>",
+            parse_mode="HTML"
+        )
+        return
+
+    del_id = int(parts[1].strip())
+    if len(config.telegram_admin_ids) <= 1:
+        await message.answer("⚠️ Нельзя удалить единственного администратора!", parse_mode="HTML")
+        return
+
+    if del_id not in config.telegram_admin_ids:
+        await message.answer(f"❌ ID <code>{del_id}</code> не найден в списке доступа.", parse_mode="HTML")
+        return
+
+    config.remove_admin_id(del_id)
+    await message.answer(
+        f"✅ Доступ для ID <code>{del_id}</code> успешно отозван.",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="👥 Список администраторов", callback_data="menu_admins")]
+        ]),
         parse_mode="HTML"
     )
 

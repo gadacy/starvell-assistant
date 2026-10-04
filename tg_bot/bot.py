@@ -89,6 +89,7 @@ async def setup_bot_profile():
             BotCommand(command="start", description="Главное меню управления"),
             BotCommand(command="profile", description="Профиль и статистика Starvell"),
             BotCommand(command="notifications", description="Настройки уведомлений"),
+            BotCommand(command="admins", description="Управление администраторами и доступом"),
             BotCommand(command="test_order", description="Проверить уведомление о покупке"),
             BotCommand(command="restart", description="Перезапустить бота"),
             BotCommand(command="about", description="О боте и проекте")
