@@ -71,9 +71,9 @@ def check_config_status() -> tuple[bool, str, str]:
     config_file = BASE_DIR / "config.json"
 
     if not config_file.exists():
-        env_starvell = os.getenv("STARVELL_API_KEY", "").strip()
         env_tg = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
-        if env_starvell or env_tg:
+        env_admins = [int(x.strip()) for x in os.getenv("TELEGRAM_ADMIN_IDS", "").split(",") if x.strip().isdigit()]
+        if env_tg and env_admins:
             try:
                 env_cfg = Config()
                 save_config(env_cfg)
@@ -95,8 +95,11 @@ def check_config_status() -> tuple[bool, str, str]:
     except Exception as e:
         return False, "corrupted", f"Файл config.json повреждён или содержит некорректные поля: {e}"
 
-    if not cfg.starvell_api_key.strip() and not cfg.telegram_bot_token.strip():
-        return False, "empty", "В файле config.json не указаны токен Telegram или ключ/кука Starvell."
+    if not cfg.telegram_bot_token.strip():
+        return False, "empty", "В файле config.json не указан обязательный токен Telegram-бота."
+
+    if not cfg.telegram_admin_ids:
+        return False, "empty", "В файле config.json не указаны обязательные ID администраторов Telegram."
 
     return True, "ok", "Конфигурация корректна."
 

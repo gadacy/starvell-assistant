@@ -75,19 +75,18 @@ def run_setup(standalone: bool = True) -> bool:
         else:
             print("⚠️ Токен не введен. Бот будет запущен в SIMULATION / DRY-RUN режиме.\n")
 
-        # 2. Telegram Bot Token
+        # 2. Telegram Bot Token (Mandatory)
         print("----------------------------------------------------------------")
-        print("2️⃣ Настройка Telegram Бота (управление и уведомления)")
+        print("2️⃣ Настройка Telegram Бота (ОБЯЗАТЕЛЬНО)")
         print("----------------------------------------------------------------")
-        print("💡 Токен можно получить у @BotFather в Telegram.")
+        print("💡 Токен бота необходим для управления ботом и получения уведомлений.")
+        print("💡 Получить токен можно у официального бота @BotFather в Telegram.\n")
 
         tg_token = ""
         while True:
             tg_token = input("🤖 Введите Telegram Bot Token: ").strip()
             if not tg_token:
-                confirm = input("⚠️ Токен бота не введен. Пропустить настройку Telegram? (y/N): ").strip().lower()
-                if confirm == "y":
-                    break
+                print("⚠️ Токен Telegram-бота обязателен! Настройку нельзя пропустить.\n")
                 continue
 
             valid, status_msg = validate_telegram_token(tg_token)
@@ -95,15 +94,28 @@ def run_setup(standalone: bool = True) -> bool:
             if valid:
                 break
             else:
-                retry = input("   Попробовать ввести снова? (Y/n): ").strip().lower()
-                if retry == "n":
-                    break
+                print("⚠️ Указан недействительный токен. Попробуйте ввести корректный токен заново.\n")
 
-        # 3. Telegram Admin IDs
+        # 3. Telegram Admin IDs (Mandatory)
+        print("----------------------------------------------------------------")
+        print("3️⃣ Настройка Администратора Telegram (ОБЯЗАТЕЛЬНО)")
+        print("----------------------------------------------------------------")
+        print("💡 ID вашего аккаунта необходим для доступа к панели управления ботом.")
+        print("💡 Узнать свой ID можно у ботов @userinfobot или @myidbot в Telegram.\n")
+
+        admin_list = []
         tg_admin_ids = ""
-        if tg_token:
-            print("\n💡 ID своего аккаунта Telegram можно узнать у ботов @userinfobot или @myidbot.")
+        while True:
             tg_admin_ids = input("👑 Введите ваш численный Telegram ID (если несколько, через запятую): ").strip()
+            if not tg_admin_ids:
+                print("⚠️ Telegram ID администратора обязателен! Настройку нельзя пропустить.\n")
+                continue
+
+            admin_list = [int(x.strip()) for x in tg_admin_ids.split(",") if x.strip().isdigit()]
+            if not admin_list:
+                print("⚠️ Неверный формат ID. Введите число (например: 123456789 или 123456789, 987654321).\n")
+                continue
+            break
 
         # Save to .env
         env_content = f"""# Starvell Authentication
@@ -122,15 +134,11 @@ DATABASE_URL=sqlite+aiosqlite:///starvell_bot.db
             f.write(env_content)
 
         # Save to config.json
-        admin_list = []
-        if tg_admin_ids:
-            admin_list = [int(x.strip()) for x in tg_admin_ids.split(",") if x.strip().isdigit()]
-
         config_data = {
             "starvell_api_key": starvell_key,
             "starvell_user_id": starvell_user_id,
             "simulation_mode": not bool(starvell_key),
-            "debug_mode": existing_data.get("debug_mode", True),
+            "debug_mode": existing_data.get("debug_mode", False),
             "telegram_bot_token": tg_token,
             "telegram_admin_ids": admin_list,
             "watermark_enabled": existing_data.get("watermark_enabled", True),
