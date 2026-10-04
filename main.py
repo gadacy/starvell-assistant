@@ -23,23 +23,71 @@ import version
 from services.update_checker import UpdateCheckerService, restart_event
 from core.banner import print_banner
 
+def ensure_config_ready() -> bool:
+    """
+    Ensures that config.json exists, is uncorrupted, and populated with credentials.
+    If the configuration is missing, damaged, or empty, launches setup wizard directly
+    in the current main.py window without requiring a separate script execution.
+    Returns True if config is ready to proceed, False otherwise.
+    """
+    is_valid, status_code, message = config.check_config_status()
+    if is_valid:
+        return True
+
+    print_banner()
+
+    if status_code == "corrupted":
+        logger.warning(f"[Main] {message}")
+        print("=" * 64)
+        print("❌ ВНИМАНИЕ: Файл конфигурации повреждён или имеет неверный формат!")
+        print(f"   Детали: {message}")
+        print("🛠️ Запуск встроенного мастера настройки setup.py для восстановления...")
+        print("=" * 64 + "\n")
+    elif status_code == "missing":
+        logger.info(f"[Main] {message}")
+        print("=" * 64)
+        print("ℹ️ Файл конфигурации config.json не найден.")
+        print("🛠️ Запуск встроенного мастера первоначальной настройки Starvell Assistant...")
+        print("=" * 64 + "\n")
+    elif status_code == "empty":
+        logger.warning(f"[Main] {message}")
+        print("=" * 64)
+        print("⚠️ В конфигурации отсутствуют авторизационные данные.")
+        print("🛠️ Запуск встроенного мастера настройки setup.py...")
+        print("=" * 64 + "\n")
+
+    if not sys.stdin.isatty():
+        logger.error(
+            f"[Main] {message} Терминал работает в неинтерактивном режиме (без TTY). "
+            f"Автоматический запуск setup.py невозможен. Заполните config.json вручную."
+        )
+        return False
+
+    from setup import run_setup
+    success = run_setup(standalone=False)
+    if not success:
+        logger.warning("[Main] Мастер настройки не был завершен. Остановка бота.")
+        return False
+
+    is_valid_after, _, msg_after = config.check_config_status()
+    if not is_valid_after:
+        logger.error(f"[Main] Конфигурация всё ещё не готова: {msg_after}")
+        return False
+
+    return True
+
 async def run_bot_instance() -> bool:
     """
     Runs a single instance of the bot.
     Returns True if soft restart was requested, False if shutdown.
     """
     restart_event.clear()
-    cfg = config.config
 
-    # Check if configured or launch setup
-    if not cfg.starvell_api_key and not cfg.telegram_bot_token:
-        logger.warning("[Main] Bot is unconfigured. Starting setup wizard...")
-        print("\n⚠️ Конфигурация бота не найдена или пуста!")
-        run_wizard = input("Желаете запустить Мастер Настройки (setup.py)? (Y/n): ").strip().lower()
-        if run_wizard != "n":
-            from setup import run_setup
-            run_setup()
-            return False
+    # Ensure valid configuration or launch embedded setup wizard
+    if not ensure_config_ready():
+        return False
+
+    cfg = config.config
 
     # 1. Initialize Database
     await init_db()
@@ -360,6 +408,8 @@ async def run_bot_instance() -> bool:
     return restart_requested
 
 async def main():
+    if not ensure_config_ready():
+        return
     print_banner()
     while True:
         logger.info(f"      🚀 Starting Starvell Assistant Bot (v{version.__version__})     ")
@@ -369,10 +419,11 @@ async def main():
         logger.info("--------------------------------------------------")
         logger.info("🔄 [Main] Мягкий перезапуск всех служб в текущем окне...")
         logger.info("--------------------------------------------------")
+        if not ensure_config_ready():
+            logger.warning("[Main] Конфигурация не готова после перезапуска. Завершение работы.")
+            break
         # Keep the shared Config instance: handlers and middleware imported it directly.
-        refreshed_config = config.load_config()
-        for field, value in refreshed_config.model_dump().items():
-            setattr(config.config, field, value)
+        config.reload_config()
         importlib.reload(version)
         importlib.reload(features)
         importlib.reload(plugins)
@@ -381,6 +432,8 @@ async def main():
 
 if __name__ == "__main__":
     try:
-        asyncio.run(main())
+        # Pre-check configuration before starting the event loop for smooth setup wizard experience
+        if ensure_config_ready():
+            asyncio.run(main())
     except KeyboardInterrupt:
         pass
