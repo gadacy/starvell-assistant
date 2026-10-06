@@ -56,35 +56,33 @@ def run_setup(standalone: bool = True) -> bool:
             except Exception:
                 pass
 
-        # 1. Starvell Session Cookie / Token
+        # 1. Starvell Session Cookie
         print("----------------------------------------------------------------")
-        print("1️⃣ Настройка Авторизации Starvell (Сессионная Кука / Токен)")
+        print("1️⃣ Авторизация Starvell (Сессионная кука из браузера)")
         print("----------------------------------------------------------------")
         print("💡 У Starvell нет официального API-ключа. Бот использует авторизационную куку сессии.")
-        print("📌 Как получить куку/токен из браузера:")
+        print("📌 Как получить куку из браузера:")
         print("   1. Зайдите на сайт Starvell.com и авторизуйтесь в свой аккаунт.")
         print("   2. Нажмите F12 (DevTools) ➔ Вкладка 'Приложение' (Application) или 'Storage'.")
         print("   3. Раздел 'Куки' (Cookies) ➔ https://starvell.com")
-        print("   4. Скопируйте значение (Value) куки: session, remember_web_*, PHPSESSID или token.")
-        print("   (Или из заголовка Authorization / Cookie любого запроса на вкладке 'Сеть' / Network).\n")
+        print("   4. Скопируйте значение (Value) куки: session, remember_web_* или token.")
+        print("   (Или из заголовка Cookie любого запроса на вкладке 'Сеть' / Network).\n")
 
-        starvell_key = input("🔑 Вставьте значение куки/токена Starvell (или нажмите Enter для тестового режима): ").strip()
-        starvell_user_id = ""
-        if starvell_key:
-            starvell_user_id = input("👤 Введите ваш Starvell User ID (опционально): ").strip()
-        else:
-            print("⚠️ Токен не введен. Бот будет запущен в SIMULATION / DRY-RUN режиме.\n")
+        starvell_key = input("🔑 Вставьте значение куки Starvell (или нажмите Enter для тестового режима): ").strip()
+        starvell_user_id = str(existing_data.get("starvell_user_id", "") or "")
+        if not starvell_key:
+            print("⚠️ Кука не введена. Бот будет запущен в SIMULATION / DRY-RUN режиме.\n")
 
         # 2. Telegram Bot Token
         print("----------------------------------------------------------------")
-        print("2️⃣ Добавление Telegram Бота")
+        print("2️⃣ Добавление Telegram Бота (Токен от @BotFather)")
         print("----------------------------------------------------------------")
         print("💡 Токен бота необходим для управления ботом и получения уведомлений.")
-        print("💡 Получить токен можно у официального бота @BotFather в Telegram.\n")
+        print("💡 Создайте бота и получите токен у официального бота @BotFather в Telegram.\n")
 
         tg_token = ""
         while True:
-            tg_token = input("🤖 Введите Telegram Bot Token: ").strip()
+            tg_token = input("🤖 Введите Telegram Bot Token (из @BotFather): ").strip()
             if not tg_token:
                 print("⚠️ Токен Telegram-бота обязателен! Настройку нельзя пропустить.\n")
                 continue
